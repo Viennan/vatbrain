@@ -8,6 +8,7 @@ This project named `vatbrain` defines a general-purpose LLM inference invocation
 	- `user` - Dir for user documents.
 	- `design` - Dir for highlevel design documents.
 	- `impls` - Dir for lowlevel implementation documents guided by `design` folder.
+	- `3rds` - 3rd-party reference docs.
 	- `INDEX.md` - Index file for the knowlege base.
 - `.devcontainer` - Development container configuration for local and remote development environments.
 - `python` - Source directory for python implementation version.

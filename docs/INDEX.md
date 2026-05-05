@@ -7,6 +7,12 @@
 
 - [design/draft.CN.md](design/draft.CN.md)：项目冷启动草稿，记录 `vatbrain` 的初始目标和早期设计构想。
 - [design/high-level-design.CN.md](design/high-level-design.CN.md)：高层次设计方案，定义设计哲学、模块职责、核心抽象、capability 来源与可靠性、非目标、演进路线和 FAQ。
+- [design/provider-capability-integration.CN.md](design/provider-capability-integration.CN.md)：Provider 能力整合设计，基于火山方舟资料完善 provider-side state、文件资源、hosted tools、多模态 embedding、media generation 和异步任务等跨厂商抽象。
+
+## Third-party References
+
+- [3rds/INDEX.md](3rds/INDEX.md)：第三方资料总索引，说明外部厂商资料在知识库中的定位。
+- [3rds/volengine/INDEX.md](3rds/volengine/INDEX.md)：火山方舟资料索引，归纳 Responses、Chat、Files、多模态 embedding、图片/视频理解、图片/视频生成、结构化输出、函数调用、reasoning 与 streaming。
 
 ## Impls
 
