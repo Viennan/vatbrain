@@ -33,14 +33,13 @@ When maintaining documents in the `docs` directory, the following rules should b
 - The `docs/impls` directory contains the implementation details under the guidance of `docs/design`.
 - User-facing documentation should live under `docs/user` when that area is introduced or expanded.
 - When organizing content discussed in `design mode` into the knowledge base, ensure that reference links are preserved, and compile the user's questions into an FAQ for storage.
-- Use relative path (comparing to `docs`) to reference other doc in the knowlege base.
+- Use base file name or full name up to `docs` dir (should be clean and not including `docs`) with its relative path (comparing to `docs`) as the linking url to reference other doc in the knowlege base.
 - When reviewing documents, refer to both design documents and code implementation. In case of conflicts, notify the user and do not make changes without authorization.
 - Do not alter the content in the `docs` directory without the user's permission.
-- Organize files under the impl directory based on programming language dimensions.
+- Organize files under the `docs/impl` and `docs/user` directories based on programming language dimensions.
 - Each language-specific variant uses its own `STATUS.md` to describe the currently implemented features and TODOs.
 
 ## Code Implementation Rules
-- Before coding new features, a thorough discussion is required, and an implementation plan — including detailed design — should be placed under `docs/impls`.
 - Prioritize focusing on the features requested by the user in the current session to avoid feature creep.
 - Unless otherwise specified by the user, break down the implementation process as needed, implementing one or more sub-functions per step, with a maximum of approximately 500 lines of code per step. Unit test code is not subject to this restriction.
 - When evaluating implementation cost, development efficiency, or delivery difficulty, explicitly factor in the productivity gains provided by AI assistance instead of estimating as if the work were done without AI support.
@@ -58,6 +57,9 @@ When maintaining documents in the `docs` directory, the following rules should b
 ## Engineering Rules
 ### Common
 - The Python language version is the reference implementation of this project. When implementing versions in other languages, their functionality should be aligned with the Python version.
+- When developing, follow the principle of first establishing a "mental model" before implementation, which means taking the following steps before coding:
+	- A thorough discussion is required, and an implementation plan — including detailed design — should be placed under `docs/impls`.
+	- Define the user interface and usage patterns — in other words, the "programming model" — and update them in corresponding user docs (under `docs/user`).
 ### Python
 - Use `python/.venv` as the Python development environment for this project. All Python code, including tests, must be run within this environment and must not pollute the system environment.
 - Maintain a `python/pyproject.toml` for packaging, or as a reference for recovering `python/.venv`.

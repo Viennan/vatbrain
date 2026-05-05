@@ -1,7 +1,7 @@
 # vatbrain 知识库索引
 
-状态：初始索引  
-日期：2026-05-04
+状态：持续维护  
+最近更新：2026-05-05
 
 ## Design
 
@@ -10,8 +10,10 @@
 
 ## Impls
 
-当前尚未建立实现设计文档。后续在实现具体功能前，应按语言维度在 `impls` 目录下补充实现计划与状态文档。
+- [impls/python/openai-adapter.CN.md](impls/python/openai-adapter.CN.md)：Python OpenAI adapter 实现方案，描述首个 provider adapter 的范围、核心模型、OpenAI 映射、测试策略与实现步骤。
+- [impls/python/STATUS.md](impls/python/STATUS.md)：Python 实现状态，记录当前完成内容、计划实现项和暂不实现项。
 
 ## User Docs
 
-当前尚未建立用户文档。后续面向使用者的指南、示例和 API 说明应放入 `user` 目录。
+- [user/python/quickstart.CN.md](user/python/quickstart.CN.md)：Python 用户指南，说明第一阶段编程模型、OpenAI client、generation、streaming、工具调用、embedding 和 capability 用法。
+- [user/python/STATUS.md](user/python/STATUS.md)：Python 用户文档状态，记录已完成内容与待完善项。

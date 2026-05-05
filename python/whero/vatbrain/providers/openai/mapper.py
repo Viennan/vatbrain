@@ -1,0 +1,315 @@
+"""OpenAI request/response mapping functions."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from typing import Any
+
+from whero.vatbrain.core.embeddings import (
+    EmbeddingInput,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingVector,
+)
+from whero.vatbrain.core.errors import InvalidItemError, ProviderResponseMappingError
+from whero.vatbrain.core.generation import (
+    GenerationConfig,
+    GenerationRequest,
+    GenerationResponse,
+    ReasoningConfig,
+    ResponseFormat,
+    ToolCallConfig,
+)
+from whero.vatbrain.core.items import (
+    FunctionCallItem,
+    FunctionResultItem,
+    ImagePart,
+    Item,
+    MessageItem,
+    Role,
+    TextPart,
+)
+from whero.vatbrain.core.tools import ToolChoice, ToolSpec
+from whero.vatbrain.core.usage import Usage
+
+PROVIDER = "openai"
+
+
+def to_openai_generation_params(request: GenerationRequest, *, stream: bool = False) -> dict[str, Any]:
+    """Convert a vatbrain generation request into OpenAI Responses API parameters."""
+
+    params: dict[str, Any] = {
+        "model": request.model,
+        "input": [_item_to_openai_input(item) for item in request.items],
+    }
+    if stream:
+        params["stream"] = True
+    if request.tools:
+        params["tools"] = [_tool_to_openai_tool(tool) for tool in request.tools]
+    if request.generation_config:
+        params.update(_generation_config_to_params(request.generation_config))
+    if request.response_format:
+        params["text"] = _response_format_to_openai_text(request.response_format)
+    if request.reasoning:
+        reasoning = _reasoning_to_openai(request.reasoning)
+        if reasoning:
+            params["reasoning"] = reasoning
+    if request.tool_call_config:
+        params.update(_tool_call_config_to_params(request.tool_call_config))
+    if request.stream_options and request.stream_options.include_usage is not None:
+        params.setdefault("stream_options", {})["include_usage"] = request.stream_options.include_usage
+    params.update(request.provider_options)
+    return params
+
+
+def to_openai_embedding_params(request: EmbeddingRequest) -> dict[str, Any]:
+    """Convert a vatbrain embedding request into OpenAI embedding parameters."""
+
+    params: dict[str, Any] = {
+        "model": request.model,
+        "input": [_embedding_input_to_text(item) for item in request.inputs],
+    }
+    if request.dimensions is not None:
+        params["dimensions"] = request.dimensions
+    if request.encoding_format is not None:
+        params["encoding_format"] = request.encoding_format
+    params.update(request.provider_options)
+    return params
+
+
+def from_openai_generation_response(response: Any) -> GenerationResponse:
+    """Convert an OpenAI Responses API response into a vatbrain response."""
+
+    output_items = tuple(_openai_output_item_to_item(item) for item in _get_attr(response, "output", []) or [])
+    return GenerationResponse(
+        id=_get_attr(response, "id", None),
+        provider=PROVIDER,
+        model=_get_attr(response, "model", None),
+        output_items=output_items,
+        stop_reason=_get_attr(response, "status", None),
+        usage=usage_from_openai(_get_attr(response, "usage", None)),
+        raw=response,
+    )
+
+
+def from_openai_embedding_response(response: Any) -> EmbeddingResponse:
+    """Convert an OpenAI embedding response into a vatbrain embedding response."""
+
+    vectors = tuple(
+        EmbeddingVector(
+            index=int(_get_attr(item, "index", index)),
+            embedding=_embedding_value(_get_attr(item, "embedding", [])),
+            raw=item,
+        )
+        for index, item in enumerate(_get_attr(response, "data", []) or [])
+    )
+    dimensions = len(vectors[0].embedding) if vectors and isinstance(vectors[0].embedding, list) else None
+    return EmbeddingResponse(
+        provider=PROVIDER,
+        model=_get_attr(response, "model", None),
+        vectors=vectors,
+        dimensions=dimensions,
+        usage=usage_from_openai(_get_attr(response, "usage", None)),
+        raw=response,
+    )
+
+
+def usage_from_openai(usage: Any | None) -> Usage | None:
+    """Normalize usage from OpenAI-like usage objects or dictionaries."""
+
+    if usage is None:
+        return None
+    input_tokens = _get_attr(usage, "input_tokens", None)
+    if input_tokens is None:
+        input_tokens = _get_attr(usage, "prompt_tokens", None)
+    output_tokens = _get_attr(usage, "output_tokens", None)
+    if output_tokens is None:
+        output_tokens = _get_attr(usage, "completion_tokens", None)
+    total_tokens = _get_attr(usage, "total_tokens", None)
+    cached_tokens = _detail_token(usage, "input_tokens_details", "cached_tokens")
+    reasoning_tokens = _detail_token(usage, "output_tokens_details", "reasoning_tokens")
+    return Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cached_tokens=cached_tokens,
+        reasoning_tokens=reasoning_tokens,
+        raw=usage,
+    )
+
+
+def _item_to_openai_input(item: Item) -> dict[str, Any]:
+    if isinstance(item, MessageItem):
+        return _message_to_openai_input(item)
+    if isinstance(item, FunctionResultItem):
+        return {
+            "type": "function_call_output",
+            "call_id": item.call_id,
+            "output": item.output,
+        }
+    if isinstance(item, FunctionCallItem):
+        return {
+            "type": "function_call",
+            "name": item.name,
+            "arguments": item.arguments,
+            "call_id": item.call_id,
+        }
+    raise InvalidItemError(f"Unsupported generation item: {item!r}")
+
+
+def _message_to_openai_input(item: MessageItem) -> dict[str, Any]:
+    content = []
+    for part in item.parts:
+        if isinstance(part, TextPart):
+            content.append({"type": _text_type_for_role(item.role), "text": part.text})
+        elif isinstance(part, ImagePart):
+            content.append(_image_part_to_openai(part))
+        else:
+            raise InvalidItemError(f"Unsupported message part: {part!r}")
+    return {"type": "message", "role": item.role.value, "content": content}
+
+
+def _text_type_for_role(role: Role) -> str:
+    return "output_text" if role == Role.ASSISTANT else "input_text"
+
+
+def _image_part_to_openai(part: ImagePart) -> dict[str, Any]:
+    image_url = part.url
+    if image_url is None and part.data is not None:
+        if part.data.startswith("data:"):
+            image_url = part.data
+        else:
+            mime_type = part.mime_type or "image/png"
+            image_url = f"data:{mime_type};base64,{part.data}"
+    payload: dict[str, Any] = {"type": "input_image", "image_url": image_url}
+    if part.detail is not None:
+        payload["detail"] = part.detail
+    return payload
+
+
+def _tool_to_openai_tool(tool: ToolSpec) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "function",
+        "name": tool.name,
+        "parameters": tool.parameters_schema or {"type": "object", "properties": {}},
+    }
+    if tool.description is not None:
+        payload["description"] = tool.description
+    if tool.strict is not None:
+        payload["strict"] = tool.strict
+    return payload
+
+
+def _generation_config_to_params(config: GenerationConfig) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if config.temperature is not None:
+        params["temperature"] = config.temperature
+    if config.top_p is not None:
+        params["top_p"] = config.top_p
+    if config.max_output_tokens is not None:
+        params["max_output_tokens"] = config.max_output_tokens
+    if config.stop is not None:
+        params["stop"] = config.stop
+    return params
+
+
+def _response_format_to_openai_text(response_format: ResponseFormat) -> dict[str, Any]:
+    if response_format.json_schema is not None:
+        return {"format": {"type": response_format.type, "schema": response_format.json_schema}}
+    return {"format": {"type": response_format.type}}
+
+
+def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if reasoning.effort is not None:
+        params["effort"] = reasoning.effort
+    if reasoning.budget_tokens is not None:
+        params["budget_tokens"] = reasoning.budget_tokens
+    if reasoning.summary is not None:
+        params["summary"] = reasoning.summary
+    if reasoning.include_trace is not None:
+        params["include_trace"] = reasoning.include_trace
+    return params
+
+
+def _tool_call_config_to_params(config: ToolCallConfig) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if config.parallel_tool_calls is not None:
+        params["parallel_tool_calls"] = config.parallel_tool_calls
+    if config.tool_choice is not None:
+        params["tool_choice"] = (
+            config.tool_choice.value
+            if isinstance(config.tool_choice, ToolChoice)
+            else config.tool_choice
+        )
+    return params
+
+
+def _openai_output_item_to_item(item: Any) -> Item:
+    item_type = _get_attr(item, "type", None)
+    if item_type == "message":
+        return _openai_message_to_item(item)
+    if item_type == "function_call":
+        return FunctionCallItem(
+            id=_get_attr(item, "id", None),
+            name=_get_attr(item, "name", ""),
+            arguments=_get_attr(item, "arguments", ""),
+            call_id=_get_attr(item, "call_id", ""),
+            status=_get_attr(item, "status", None),
+        )
+    raise ProviderResponseMappingError(f"Unsupported OpenAI output item type: {item_type!r}")
+
+
+def _openai_message_to_item(item: Any) -> MessageItem:
+    parts: list[TextPart] = []
+    for content_item in _get_attr(item, "content", []) or []:
+        content_type = _get_attr(content_item, "type", None)
+        if content_type in {"output_text", "input_text", "text"}:
+            parts.append(TextPart(_get_attr(content_item, "text", "")))
+    if not parts:
+        parts.append(TextPart(""))
+    return MessageItem(
+        Role(_get_attr(item, "role", Role.ASSISTANT.value)),
+        parts,
+        id=_get_attr(item, "id", None),
+    )
+
+
+def _embedding_input_to_text(item: EmbeddingInput) -> str:
+    texts: list[str] = []
+    for part in item.parts:
+        if isinstance(part, TextPart):
+            texts.append(part.text)
+        else:
+            raise InvalidItemError("OpenAI adapter v0.1 supports text embedding inputs only.")
+    return "\n".join(texts)
+
+
+def _embedding_value(value: Any) -> list[float] | str:
+    if isinstance(value, str):
+        return value
+    return list(value)
+
+
+def _detail_token(usage: Any, detail_name: str, token_name: str) -> int | None:
+    details = _get_attr(usage, detail_name, None)
+    if details is None:
+        return None
+    return _get_attr(details, token_name, None)
+
+
+def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def json_arguments(arguments: Mapping[str, Any] | str) -> str:
+    """Serialize tool call arguments consistently."""
+
+    if isinstance(arguments, str):
+        return arguments
+    return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))

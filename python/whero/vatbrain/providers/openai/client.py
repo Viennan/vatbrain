@@ -1,0 +1,298 @@
+"""OpenAI provider client."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Iterator, Mapping
+import os
+from typing import Any
+
+from whero.vatbrain.core.capabilities import AdapterCapability, ModelCapability
+from whero.vatbrain.core.client import ClientConfig
+from whero.vatbrain.core.embeddings import EmbeddingInput, EmbeddingRequest, EmbeddingResponse
+from whero.vatbrain.core.errors import ProviderRequestError
+from whero.vatbrain.core.generation import (
+    GenerationConfig,
+    GenerationRequest,
+    GenerationResponse,
+    GenerationStreamEvent,
+    ReasoningConfig,
+    ResponseFormat,
+    StreamOptions,
+    ToolCallConfig,
+)
+from whero.vatbrain.core.items import Item
+from whero.vatbrain.core.tools import ToolSpec
+from whero.vatbrain.providers.openai.capabilities import (
+    get_adapter_capability,
+    get_model_capability,
+)
+from whero.vatbrain.providers.openai.mapper import (
+    from_openai_embedding_response,
+    from_openai_generation_response,
+    to_openai_embedding_params,
+    to_openai_generation_params,
+)
+from whero.vatbrain.providers.openai.stream import from_openai_stream_event
+
+
+class OpenAIClient:
+    """Provider-level OpenAI adapter client."""
+
+    provider = "openai"
+    api_key_env_var = "ENV_VATBRAIN_OPENAI_API_KEY"
+
+    def __init__(
+        self,
+        *,
+        config: ClientConfig | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        client: Any | None = None,
+        async_client: Any | None = None,
+        model_capability_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+        **openai_client_options: Any,
+    ) -> None:
+        self._client = client
+        self._async_client = async_client
+        self._client_options = _merge_client_options(
+            config=config,
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            provider_options=openai_client_options,
+        )
+        self._model_capability_overrides = {
+            model: dict(values)
+            for model, values in (model_capability_overrides or {}).items()
+        }
+
+    def generate(
+        self,
+        *,
+        model: str,
+        items: list[Item] | tuple[Item, ...],
+        tools: list[ToolSpec] | tuple[ToolSpec, ...] = (),
+        generation_config: GenerationConfig | None = None,
+        response_format: ResponseFormat | None = None,
+        reasoning: ReasoningConfig | None = None,
+        tool_call_config: ToolCallConfig | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> GenerationResponse:
+        request = GenerationRequest(
+            model=model,
+            items=items,
+            tools=tools,
+            generation_config=generation_config,
+            response_format=response_format,
+            reasoning=reasoning,
+            tool_call_config=tool_call_config,
+            provider_options=provider_options,
+        )
+        params = to_openai_generation_params(request)
+        try:
+            response = self._sync_client.responses.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI generation request failed.", cause=exc) from exc
+        return from_openai_generation_response(response)
+
+    async def agenerate(
+        self,
+        *,
+        model: str,
+        items: list[Item] | tuple[Item, ...],
+        tools: list[ToolSpec] | tuple[ToolSpec, ...] = (),
+        generation_config: GenerationConfig | None = None,
+        response_format: ResponseFormat | None = None,
+        reasoning: ReasoningConfig | None = None,
+        tool_call_config: ToolCallConfig | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> GenerationResponse:
+        request = GenerationRequest(
+            model=model,
+            items=items,
+            tools=tools,
+            generation_config=generation_config,
+            response_format=response_format,
+            reasoning=reasoning,
+            tool_call_config=tool_call_config,
+            provider_options=provider_options,
+        )
+        params = to_openai_generation_params(request)
+        try:
+            response = await self._async_openai_client.responses.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI async generation request failed.", cause=exc) from exc
+        return from_openai_generation_response(response)
+
+    def stream_generate(
+        self,
+        *,
+        model: str,
+        items: list[Item] | tuple[Item, ...],
+        tools: list[ToolSpec] | tuple[ToolSpec, ...] = (),
+        generation_config: GenerationConfig | None = None,
+        response_format: ResponseFormat | None = None,
+        reasoning: ReasoningConfig | None = None,
+        tool_call_config: ToolCallConfig | None = None,
+        stream_options: StreamOptions | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> Iterator[GenerationStreamEvent]:
+        request = GenerationRequest(
+            model=model,
+            items=items,
+            tools=tools,
+            generation_config=generation_config,
+            response_format=response_format,
+            reasoning=reasoning,
+            tool_call_config=tool_call_config,
+            stream_options=stream_options,
+            provider_options=provider_options,
+        )
+        params = to_openai_generation_params(request, stream=True)
+        try:
+            stream = self._sync_client.responses.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI stream generation request failed.", cause=exc) from exc
+        for sequence, event in enumerate(stream):
+            yield from_openai_stream_event(event, sequence=sequence)
+
+    async def astream_generate(
+        self,
+        *,
+        model: str,
+        items: list[Item] | tuple[Item, ...],
+        tools: list[ToolSpec] | tuple[ToolSpec, ...] = (),
+        generation_config: GenerationConfig | None = None,
+        response_format: ResponseFormat | None = None,
+        reasoning: ReasoningConfig | None = None,
+        tool_call_config: ToolCallConfig | None = None,
+        stream_options: StreamOptions | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AsyncIterator[GenerationStreamEvent]:
+        request = GenerationRequest(
+            model=model,
+            items=items,
+            tools=tools,
+            generation_config=generation_config,
+            response_format=response_format,
+            reasoning=reasoning,
+            tool_call_config=tool_call_config,
+            stream_options=stream_options,
+            provider_options=provider_options,
+        )
+        params = to_openai_generation_params(request, stream=True)
+        try:
+            stream = await self._async_openai_client.responses.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI async stream generation request failed.", cause=exc) from exc
+        sequence = 0
+        async for event in stream:
+            yield from_openai_stream_event(event, sequence=sequence)
+            sequence += 1
+
+    def embed(
+        self,
+        *,
+        model: str,
+        inputs: list[EmbeddingInput | str] | tuple[EmbeddingInput | str, ...],
+        dimensions: int | None = None,
+        encoding_format: str | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> EmbeddingResponse:
+        request = EmbeddingRequest(
+            model=model,
+            inputs=inputs,
+            dimensions=dimensions,
+            encoding_format=encoding_format,
+            provider_options=provider_options,
+        )
+        params = to_openai_embedding_params(request)
+        try:
+            response = self._sync_client.embeddings.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI embedding request failed.", cause=exc) from exc
+        return from_openai_embedding_response(response)
+
+    async def aembed(
+        self,
+        *,
+        model: str,
+        inputs: list[EmbeddingInput | str] | tuple[EmbeddingInput | str, ...],
+        dimensions: int | None = None,
+        encoding_format: str | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> EmbeddingResponse:
+        request = EmbeddingRequest(
+            model=model,
+            inputs=inputs,
+            dimensions=dimensions,
+            encoding_format=encoding_format,
+            provider_options=provider_options,
+        )
+        params = to_openai_embedding_params(request)
+        try:
+            response = await self._async_openai_client.embeddings.create(**params)
+        except Exception as exc:
+            raise ProviderRequestError("OpenAI async embedding request failed.", cause=exc) from exc
+        return from_openai_embedding_response(response)
+
+    def get_adapter_capability(self) -> AdapterCapability:
+        return get_adapter_capability()
+
+    def get_model_capability(
+        self,
+        model: str,
+        *,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> ModelCapability:
+        merged_overrides = dict(self._model_capability_overrides.get(model, {}))
+        if overrides:
+            merged_overrides.update(dict(overrides))
+        return get_model_capability(model, overrides=merged_overrides or None)
+
+    @property
+    def _sync_client(self) -> Any:
+        if self._client is None:
+            from openai import OpenAI
+
+            self._client = OpenAI(**self._client_options)
+        return self._client
+
+    @property
+    def _async_openai_client(self) -> Any:
+        if self._async_client is None:
+            from openai import AsyncOpenAI
+
+            self._async_client = AsyncOpenAI(**self._client_options)
+        return self._async_client
+
+
+def _merge_client_options(
+    *,
+    config: ClientConfig | None,
+    api_key: str | None,
+    base_url: str | None,
+    timeout: float | None,
+    max_retries: int | None,
+    provider_options: Mapping[str, Any],
+) -> dict[str, Any]:
+    options: dict[str, Any] = dict(config.provider_options or {}) if config else {}
+    options.update(provider_options)
+    resolved_api_key = api_key if api_key is not None else (config.api_key if config else None)
+    if resolved_api_key is None:
+        resolved_api_key = os.getenv(OpenAIClient.api_key_env_var)
+    resolved_base_url = base_url if base_url is not None else (config.base_url if config else None)
+    resolved_timeout = timeout if timeout is not None else (config.timeout if config else None)
+    resolved_max_retries = max_retries if max_retries is not None else (config.max_retries if config else None)
+    if resolved_api_key is not None:
+        options["api_key"] = resolved_api_key
+    if resolved_base_url is not None:
+        options["base_url"] = resolved_base_url
+    if resolved_timeout is not None:
+        options["timeout"] = resolved_timeout
+    if resolved_max_retries is not None:
+        options["max_retries"] = resolved_max_retries
+    return options
