@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Iterable
 
@@ -36,10 +37,23 @@ class ResponseFormat:
 class ReasoningConfig:
     """Common reasoning behavior controls."""
 
+    mode: str | None = None
     effort: str | None = None
     budget_tokens: int | None = None
     summary: str | None = None
     include_trace: bool | None = None
+    provider_options: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteContextHint:
+    """Provider-side context/cache hints that do not replace full context."""
+
+    previous_response_id: str | None = None
+    cache_policy: str | None = None
+    store: bool | None = None
+    expires_at: datetime | str | None = None
+    provider_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +83,7 @@ class GenerationRequest:
     reasoning: ReasoningConfig | None = None
     tool_call_config: ToolCallConfig | None = None
     stream_options: StreamOptions | None = None
+    remote_context: RemoteContextHint | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
@@ -82,6 +97,7 @@ class GenerationRequest:
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
+        remote_context: RemoteContextHint | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> None:
         if not model:
@@ -97,6 +113,7 @@ class GenerationRequest:
         object.__setattr__(self, "reasoning", reasoning)
         object.__setattr__(self, "tool_call_config", tool_call_config)
         object.__setattr__(self, "stream_options", stream_options)
+        object.__setattr__(self, "remote_context", remote_context)
         object.__setattr__(self, "provider_options", dict(provider_options or {}))
 
 

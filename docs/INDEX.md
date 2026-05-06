@@ -7,7 +7,7 @@
 
 - [design/draft.CN.md](design/draft.CN.md)：项目冷启动草稿，记录 `vatbrain` 的初始目标和早期设计构想。
 - [design/high-level-design.CN.md](design/high-level-design.CN.md)：高层次设计方案，定义设计哲学、模块职责、核心抽象、capability 来源与可靠性、非目标、演进路线和 FAQ。
-- [design/provider-capability-integration.CN.md](design/provider-capability-integration.CN.md)：Provider 能力整合设计，基于火山方舟资料完善 provider-side state、文件资源、hosted tools、多模态 embedding、media generation 和异步任务等跨厂商抽象。
+- [design/provider-capability-integration.CN.md](design/provider-capability-integration.CN.md)：Provider 能力整合设计，基于火山方舟资料完善 provider-side state、文件资源、多模态 embedding、media generation 和异步任务等跨厂商抽象；provider-hosted/remote tools 暂缓进入通用 core。
 
 ## Third-party References
 
@@ -19,6 +19,7 @@
 - [impls/python/openai-adapter.CN.md](impls/python/openai-adapter.CN.md)：Python OpenAI adapter 实现方案，描述首个 provider adapter 的范围、核心模型、OpenAI 映射、测试策略与实现步骤。
 - [impls/python/evolution-plan.CN.md](impls/python/evolution-plan.CN.md)：Python 版本演进方案，定义 v0.2 OpenAI 合约加固、v0.3 core API family 扩展、v0.4 Volcengine adapter MVP、v0.5 hosted tools/media generation 和 v0.6 稳定化路线。
 - [impls/python/v0.2-responses-contract-hardening.CN.md](impls/python/v0.2-responses-contract-hardening.CN.md)：Python v0.2 Responses Contract Hardening 设计方案，细化 OpenAI Responses API 参数映射、structured output、streaming event、stream accumulator、错误映射与验收测试。
+- [impls/python/v0.3-core-api-family-expansion.CN.md](impls/python/v0.3-core-api-family-expansion.CN.md)：Python v0.3 Core API Family Expansion 实现方案，规划 items、generation、embedding、resources、media、function tools、capabilities 的 core 模型扩展、兼容策略、测试方案与实施步骤。
 - [impls/python/STATUS.md](impls/python/STATUS.md)：Python 实现状态，记录当前完成内容、计划实现项和暂不实现项。
 
 ## User Docs

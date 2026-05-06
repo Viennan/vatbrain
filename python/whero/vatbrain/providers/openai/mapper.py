@@ -12,12 +12,13 @@ from whero.vatbrain.core.embeddings import (
     EmbeddingResponse,
     EmbeddingVector,
 )
-from whero.vatbrain.core.errors import InvalidItemError, ProviderResponseMappingError
+from whero.vatbrain.core.errors import InvalidItemError, ProviderResponseMappingError, UnsupportedCapabilityError
 from whero.vatbrain.core.generation import (
     GenerationConfig,
     GenerationRequest,
     GenerationResponse,
     ReasoningConfig,
+    RemoteContextHint,
     ResponseFormat,
     ToolCallConfig,
 )
@@ -30,7 +31,7 @@ from whero.vatbrain.core.items import (
     Role,
     TextPart,
 )
-from whero.vatbrain.core.tools import ToolChoice, ToolSpec
+from whero.vatbrain.core.tools import FunctionToolSpec, ToolChoice, ToolSpec
 from whero.vatbrain.core.usage import Usage
 
 PROVIDER = "openai"
@@ -55,6 +56,8 @@ def to_openai_generation_params(request: GenerationRequest, *, stream: bool = Fa
         reasoning = _reasoning_to_openai(request.reasoning)
         if reasoning:
             params["reasoning"] = reasoning
+    if request.remote_context:
+        params.update(_remote_context_to_openai(request.remote_context))
     if request.tool_call_config:
         params.update(_tool_call_config_to_params(request.tool_call_config))
     params.update(request.provider_options)
@@ -64,6 +67,10 @@ def to_openai_generation_params(request: GenerationRequest, *, stream: bool = Fa
 def to_openai_embedding_params(request: EmbeddingRequest) -> dict[str, Any]:
     """Convert a vatbrain embedding request into OpenAI embedding parameters."""
 
+    if request.instructions is not None:
+        raise UnsupportedCapabilityError("OpenAI embedding adapter does not support instructions.")
+    if request.sparse_embedding:
+        raise UnsupportedCapabilityError("OpenAI embedding adapter does not support sparse embeddings.")
     params: dict[str, Any] = {
         "model": request.model,
         "input": [_embedding_input_to_text(item) for item in request.inputs],
@@ -204,6 +211,8 @@ def _image_part_to_openai(part: ImagePart) -> dict[str, Any]:
 
 
 def _tool_to_openai_tool(tool: ToolSpec) -> dict[str, Any]:
+    if not isinstance(tool, FunctionToolSpec):
+        raise UnsupportedCapabilityError("OpenAI adapter currently maps function tools only.")
     payload: dict[str, Any] = {
         "type": "function",
         "name": tool.name,
@@ -269,7 +278,9 @@ def _looks_like_openai_json_schema_wrapper(schema: dict[str, Any]) -> bool:
 
 
 def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = dict(reasoning.provider_options)
+    if reasoning.mode is not None:
+        params["mode"] = reasoning.mode
     if reasoning.effort is not None:
         params["effort"] = reasoning.effort
     if reasoning.budget_tokens is not None:
@@ -278,6 +289,17 @@ def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
         params["summary"] = reasoning.summary
     if reasoning.include_trace is not None:
         params["include_trace"] = reasoning.include_trace
+    return params
+
+
+def _remote_context_to_openai(remote_context: RemoteContextHint) -> dict[str, Any]:
+    params = dict(remote_context.provider_options)
+    if remote_context.previous_response_id is not None:
+        params["previous_response_id"] = remote_context.previous_response_id
+    if remote_context.store is not None:
+        params["store"] = remote_context.store
+    if remote_context.cache_policy is not None:
+        params["prompt_cache_retention"] = remote_context.cache_policy
     return params
 
 

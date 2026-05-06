@@ -10,15 +10,17 @@ from whero.vatbrain import (
     GenerationRequest,
     MessageItem,
     ReasoningConfig,
+    RemoteContextHint,
     ResponseFormat,
     StreamOptions,
     TextPart,
     ToolCallConfig,
     ToolChoice,
     ToolSpec,
+    VideoPart,
 )
+from whero.vatbrain.core.errors import InvalidItemError, ProviderResponseMappingError
 from whero.vatbrain.core.items import FunctionCallItem
-from whero.vatbrain.core.errors import ProviderResponseMappingError
 from whero.vatbrain.providers.openai.mapper import (
     from_openai_generation_response,
     to_openai_generation_params,
@@ -46,7 +48,7 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
             )
         ],
         generation_config=GenerationConfig(temperature=0.2, max_output_tokens=128),
-        reasoning=ReasoningConfig(effort="medium", budget_tokens=1024, summary="auto"),
+        reasoning=ReasoningConfig(mode="auto", effort="medium", budget_tokens=1024, summary="auto"),
         tool_call_config=ToolCallConfig(
             parallel_tool_calls=False,
             tool_choice=ToolChoice.AUTO,
@@ -81,6 +83,7 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
     assert params["temperature"] == 0.2
     assert params["max_output_tokens"] == 128
     assert params["reasoning"] == {
+        "mode": "auto",
         "effort": "medium",
         "budget_tokens": 1024,
         "summary": "auto",
@@ -88,6 +91,37 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
     assert params["parallel_tool_calls"] is False
     assert params["tool_choice"] == "auto"
     assert params["metadata"] == {"trace_id": "t-1"}
+
+
+def test_generation_request_maps_remote_context_hint() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        remote_context=RemoteContextHint(
+            previous_response_id="resp_1",
+            store=True,
+            cache_policy="24h",
+            provider_options={"prompt_cache_key": "cache-key"},
+        ),
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["previous_response_id"] == "resp_1"
+    assert params["store"] is True
+    assert params["prompt_cache_retention"] == "24h"
+    assert params["prompt_cache_key"] == "cache-key"
+
+
+def test_openai_generation_mapper_rejects_unsupported_new_parts() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user([VideoPart(url="https://example.test/a.mp4")])],
+    )
+
+    with pytest.raises(InvalidItemError):
+        to_openai_generation_params(request)
+
 
 
 def test_stream_options_include_usage_is_not_mapped_to_openai_stream_options() -> None:

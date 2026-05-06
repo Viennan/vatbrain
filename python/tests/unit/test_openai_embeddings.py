@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from whero.vatbrain import EmbeddingInput, EmbeddingRequest, ImagePart, TextPart
-from whero.vatbrain.core.errors import InvalidItemError
+from whero.vatbrain.core.errors import InvalidItemError, UnsupportedCapabilityError
 from whero.vatbrain.providers.openai.mapper import (
     from_openai_embedding_response,
     to_openai_embedding_params,
@@ -40,6 +40,18 @@ def test_openai_embedding_adapter_rejects_non_text_embedding_input() -> None:
         to_openai_embedding_params(request)
 
 
+def test_openai_embedding_adapter_rejects_instructions_and_sparse_embeddings() -> None:
+    with pytest.raises(UnsupportedCapabilityError):
+        to_openai_embedding_params(
+            EmbeddingRequest(model="text-embedding-test", inputs=["hello"], instructions="query")
+        )
+
+    with pytest.raises(UnsupportedCapabilityError):
+        to_openai_embedding_params(
+            EmbeddingRequest(model="text-embedding-test", inputs=["hello"], sparse_embedding=True)
+        )
+
+
 def test_embedding_response_maps_vectors_and_usage() -> None:
     response = SimpleNamespace(
         model="text-embedding-test",
@@ -55,6 +67,7 @@ def test_embedding_response_maps_vectors_and_usage() -> None:
     assert mapped.model == "text-embedding-test"
     assert mapped.dimensions == 2
     assert [vector.embedding for vector in mapped.vectors] == [[0.1, 0.2], [0.3, 0.4]]
+    assert [vector.dense for vector in mapped.vectors] == [[0.1, 0.2], [0.3, 0.4]]
     assert mapped.usage is not None
     assert mapped.usage.input_tokens == 7
     assert mapped.usage.total_tokens == 7

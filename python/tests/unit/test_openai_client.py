@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from whero.vatbrain import ClientConfig, MessageItem, ReasoningConfig, ToolCallConfig
+from whero.vatbrain import ClientConfig, MessageItem, ReasoningConfig, RemoteContextHint, ToolCallConfig
 from whero.vatbrain.core.errors import ProviderRequestError
 from whero.vatbrain.core.generation import StreamEventType
 from whero.vatbrain.providers.openai import OpenAIClient
@@ -76,12 +76,14 @@ def test_client_generate_uses_explicit_model_and_common_options() -> None:
         items=[MessageItem.user("hello")],
         reasoning=ReasoningConfig(effort="low"),
         tool_call_config=ToolCallConfig(parallel_tool_calls=True),
+        remote_context=RemoteContextHint(previous_response_id="resp_old"),
     )
 
     assert response.id == "resp_1"
     assert fake.responses.calls[0]["model"] == "gpt-test"
     assert fake.responses.calls[0]["reasoning"] == {"effort": "low"}
     assert fake.responses.calls[0]["parallel_tool_calls"] is True
+    assert fake.responses.calls[0]["previous_response_id"] == "resp_old"
 
 
 def test_client_stream_generate_maps_events() -> None:

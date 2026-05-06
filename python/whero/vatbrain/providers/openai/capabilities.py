@@ -5,7 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from whero.vatbrain.core.capabilities import AdapterCapability, ModelCapability
+from whero.vatbrain.core.capabilities import (
+    AdapterCapability,
+    CapabilityValue,
+    EmbeddingCapability,
+    GenerationCapability,
+    ModelCapability,
+    ToolCapability,
+)
 
 PROVIDER = "openai"
 
@@ -22,6 +29,32 @@ def get_adapter_capability() -> AdapterCapability:
         supports_multimodal_embedding=False,
         supports_function_tools=True,
         supports_usage_mapping=True,
+        generation=GenerationCapability(
+            supported=CapabilityValue.adapter_builtin(True),
+            streaming=CapabilityValue.adapter_builtin(True),
+            input_modalities=CapabilityValue.adapter_builtin(("text", "image")),
+            output_modalities=CapabilityValue.adapter_builtin(("text",)),
+            structured_output=CapabilityValue.adapter_builtin(True),
+            reasoning_config=CapabilityValue.adapter_builtin(True),
+            supported_reasoning_efforts=CapabilityValue.adapter_builtin(
+                ("none", "minimal", "low", "medium", "high", "xhigh")
+            ),
+            reasoning_output=CapabilityValue.adapter_builtin(False),
+            remote_context=CapabilityValue.adapter_builtin(True),
+            function_tools=CapabilityValue.adapter_builtin(True),
+        ),
+        embedding=EmbeddingCapability(
+            supported=CapabilityValue.adapter_builtin(True),
+            input_modalities=CapabilityValue.adapter_builtin(("text",)),
+            dense=CapabilityValue.adapter_builtin(True),
+            sparse=CapabilityValue.adapter_builtin(False),
+            instructions=CapabilityValue.adapter_builtin(False),
+        ),
+        tools=ToolCapability(
+            user_function_tools=CapabilityValue.adapter_builtin(True),
+            parallel_tool_calls=CapabilityValue.adapter_builtin(True),
+            tool_choice=CapabilityValue.adapter_builtin(True),
+        ),
     )
 
 

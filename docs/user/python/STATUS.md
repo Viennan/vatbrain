@@ -1,6 +1,6 @@
 # Python 用户文档状态
 
-状态：v0.2 已更新  
+状态：v0.3 已更新  
 日期：2026-05-05
 最近更新：2026-05-06
 
@@ -10,6 +10,8 @@
 - OpenAI provider client 的基本使用方式。
 - generation、streaming、stream accumulator、structured output、工具调用、embedding、capability 的基础示例。
 - 说明 OpenAI Responses API 下 `StreamOptions(include_usage=True)` 不映射为 `stream_options.include_usage`。
+- 说明 v0.3 新增 core models、RemoteContextHint、多模态 embedding 表达，以及这些模型与当前 OpenAI adapter 支持范围的边界。
+- 说明 provider-hosted tool、remote tool、MCP tool 和 provider conversation 持久化上下文暂不作为通用 core 抽象暴露。
 
 ## 待完善
 

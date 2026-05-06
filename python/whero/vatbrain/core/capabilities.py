@@ -67,6 +67,70 @@ class CapabilityValue(Generic[T]):
 
 
 @dataclass(frozen=True, slots=True)
+class GenerationCapability:
+    """Generation API family capability."""
+
+    supported: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    streaming: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    input_modalities: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    output_modalities: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    structured_output: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    reasoning_config: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    supported_reasoning_efforts: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    reasoning_output: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    remote_context: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    function_tools: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingCapability:
+    """Embedding API family capability."""
+
+    supported: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    input_modalities: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    dense: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    sparse: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    dimensions: CapabilityValue[tuple[int, ...]] = field(default_factory=CapabilityValue.unknown)
+    instructions: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceCapability:
+    """Resource/file API family capability."""
+
+    file_upload: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    file_retrieve: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    file_list: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    file_delete: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    preprocessing: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class MediaGenerationCapability:
+    """Media generation API family capability."""
+
+    image_generation: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    video_generation: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    streaming: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    async_task: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    output_formats: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCapability:
+    """Tool API family capability."""
+
+    user_function_tools: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    parallel_tool_calls: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    tool_choice: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class AdapterCapability:
     """Capabilities reliably implemented by one provider adapter."""
 
@@ -78,6 +142,11 @@ class AdapterCapability:
     supports_multimodal_embedding: bool = False
     supports_function_tools: bool = False
     supports_usage_mapping: bool = False
+    generation: GenerationCapability | None = None
+    embedding: EmbeddingCapability | None = None
+    resources: ResourceCapability | None = None
+    media_generation: MediaGenerationCapability | None = None
+    tools: ToolCapability | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -100,6 +169,13 @@ class ModelCapability:
     supports_reasoning_summary: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     supports_text_embedding: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     supports_multimodal_embedding: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    input_modalities: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    output_modalities: CapabilityValue[tuple[str, ...]] = field(default_factory=CapabilityValue.unknown)
+    supports_remote_context: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    supports_sparse_embedding: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    supports_file_resources: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    supports_image_generation: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    supports_video_generation: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def with_overrides(self, **values: Any) -> ModelCapability:

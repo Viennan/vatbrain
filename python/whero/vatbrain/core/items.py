@@ -23,6 +23,7 @@ class ItemKind(StrEnum):
     MESSAGE = "message"
     FUNCTION_CALL = "function_call"
     FUNCTION_RESULT = "function_result"
+    REASONING = "reasoning"
 
 
 class ItemPurpose(StrEnum):
@@ -41,6 +42,9 @@ class PartKind(StrEnum):
 
     TEXT = "text"
     IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    FILE = "file"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +70,81 @@ class ImagePart:
             raise ValueError("ImagePart requires exactly one of url or data.")
 
 
-ContentPart = TextPart | ImagePart
+@dataclass(frozen=True, slots=True)
+class AudioPart:
+    """An audio content part reference."""
+
+    url: str | None = None
+    data: str | None = None
+    file_id: str | None = None
+    local_path: str | None = None
+    mime_type: str | None = None
+    format: str | None = None
+    provider: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    kind: Literal[PartKind.AUDIO] = PartKind.AUDIO
+
+    def __post_init__(self) -> None:
+        _validate_single_source(
+            "AudioPart",
+            file_id=self.file_id,
+            url=self.url,
+            data=self.data,
+            local_path=self.local_path,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class VideoPart:
+    """A video content part reference."""
+
+    url: str | None = None
+    data: str | None = None
+    file_id: str | None = None
+    local_path: str | None = None
+    mime_type: str | None = None
+    format: str | None = None
+    provider: str | None = None
+    fps: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    kind: Literal[PartKind.VIDEO] = PartKind.VIDEO
+
+    def __post_init__(self) -> None:
+        _validate_single_source(
+            "VideoPart",
+            file_id=self.file_id,
+            url=self.url,
+            data=self.data,
+            local_path=self.local_path,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FilePart:
+    """A provider file or local file reference used as content."""
+
+    file_id: str | None = None
+    url: str | None = None
+    data: str | None = None
+    local_path: str | None = None
+    filename: str | None = None
+    mime_type: str | None = None
+    media_type: str | None = None
+    provider: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    kind: Literal[PartKind.FILE] = PartKind.FILE
+
+    def __post_init__(self) -> None:
+        _validate_single_source(
+            "FilePart",
+            file_id=self.file_id,
+            url=self.url,
+            data=self.data,
+            local_path=self.local_path,
+        )
+
+
+ContentPart = TextPart | ImagePart | AudioPart | VideoPart | FilePart
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,4 +228,34 @@ class FunctionResultItem:
     purpose: ClassVar[ItemPurpose] = ItemPurpose.TOOL_IO
 
 
-Item = MessageItem | FunctionCallItem | FunctionResultItem
+@dataclass(frozen=True, slots=True)
+class ReasoningItem:
+    """Provider-returned reasoning content or summary."""
+
+    text: str | None = None
+    summary: str | None = None
+    provider: str | None = None
+    visibility: str | None = None
+    can_be_replayed: bool | None = False
+    id: str | None = None
+    status: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    raw: Any | None = None
+    kind: ClassVar[ItemKind] = ItemKind.REASONING
+    role: ClassVar[Role] = Role.ASSISTANT
+    purpose: ClassVar[ItemPurpose] = ItemPurpose.CONTEXT
+
+    def __post_init__(self) -> None:
+        if self.text is None and self.summary is None and self.raw is None:
+            raise ValueError("ReasoningItem requires text, summary, or raw.")
+
+
+Item = MessageItem | FunctionCallItem | FunctionResultItem | ReasoningItem
+
+
+def _validate_single_source(name: str, **sources: str | None) -> None:
+    provided = [source_name for source_name, value in sources.items() if bool(value)]
+    if not provided:
+        raise ValueError(f"{name} requires one of {', '.join(sources)}.")
+    if len(provided) > 1:
+        raise ValueError(f"{name} requires exactly one content source; got {', '.join(provided)}.")

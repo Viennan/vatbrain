@@ -16,6 +16,7 @@ from whero.vatbrain.core.generation import (
     GenerationResponse,
     GenerationStreamEvent,
     ReasoningConfig,
+    RemoteContextHint,
     ResponseFormat,
     StreamOptions,
     ToolCallConfig,
@@ -80,6 +81,7 @@ class OpenAIClient:
         response_format: ResponseFormat | None = None,
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
+        remote_context: RemoteContextHint | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> GenerationResponse:
         request = GenerationRequest(
@@ -90,6 +92,7 @@ class OpenAIClient:
             response_format=response_format,
             reasoning=reasoning,
             tool_call_config=tool_call_config,
+            remote_context=remote_context,
             provider_options=provider_options,
         )
         params = to_openai_generation_params(request)
@@ -109,6 +112,7 @@ class OpenAIClient:
         response_format: ResponseFormat | None = None,
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
+        remote_context: RemoteContextHint | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> GenerationResponse:
         request = GenerationRequest(
@@ -119,6 +123,7 @@ class OpenAIClient:
             response_format=response_format,
             reasoning=reasoning,
             tool_call_config=tool_call_config,
+            remote_context=remote_context,
             provider_options=provider_options,
         )
         params = to_openai_generation_params(request)
@@ -139,6 +144,7 @@ class OpenAIClient:
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
+        remote_context: RemoteContextHint | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> Iterator[GenerationStreamEvent]:
         request = GenerationRequest(
@@ -150,6 +156,7 @@ class OpenAIClient:
             reasoning=reasoning,
             tool_call_config=tool_call_config,
             stream_options=stream_options,
+            remote_context=remote_context,
             provider_options=provider_options,
         )
         params = to_openai_generation_params(request, stream=True)
@@ -171,6 +178,7 @@ class OpenAIClient:
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
+        remote_context: RemoteContextHint | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[GenerationStreamEvent]:
         request = GenerationRequest(
@@ -182,6 +190,7 @@ class OpenAIClient:
             reasoning=reasoning,
             tool_call_config=tool_call_config,
             stream_options=stream_options,
+            remote_context=remote_context,
             provider_options=provider_options,
         )
         params = to_openai_generation_params(request, stream=True)
