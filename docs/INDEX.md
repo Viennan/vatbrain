@@ -17,6 +17,7 @@
 ## Impls
 
 - [impls/python/openai-adapter.CN.md](impls/python/openai-adapter.CN.md)：Python OpenAI adapter 实现方案，描述首个 provider adapter 的范围、核心模型、OpenAI 映射、测试策略与实现步骤。
+- [impls/python/evolution-plan.CN.md](impls/python/evolution-plan.CN.md)：Python 版本演进方案，定义 v0.2 OpenAI 合约加固、v0.3 core API family 扩展、v0.4 Volcengine adapter MVP、v0.5 hosted tools/media generation 和 v0.6 稳定化路线。
 - [impls/python/STATUS.md](impls/python/STATUS.md)：Python 实现状态，记录当前完成内容、计划实现项和暂不实现项。
 
 ## User Docs
