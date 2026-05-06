@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Provider-neutral LLM inference abstraction layer."
 requires-python = ">=3.12"
 dependencies = [
-    "openai>=1.0.0",
+    "openai>=2.34.0,<3",
 ]
 
 [project.optional-dependencies]

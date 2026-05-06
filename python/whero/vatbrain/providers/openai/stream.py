@@ -19,6 +19,7 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
     event_type = _get_attr(event, "type", None)
     response_id = _response_id_from_event(event)
     item_id = _get_attr(event, "item_id", None)
+    metadata = _metadata_from_event(event, event_type)
 
     if event_type == "response.created":
         response = _get_attr(event, "response", None)
@@ -28,14 +29,18 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             provider=PROVIDER,
             response_id=_get_attr(response, "id", response_id),
             response=_safe_response(response),
+            metadata=metadata,
             raw_event=event,
         )
-    if event_type in {"response.in_progress", "response.started"}:
+    if event_type in {"response.in_progress", "response.started", "response.queued"}:
+        if event_type == "response.queued":
+            metadata["status"] = "queued"
         return GenerationStreamEvent(
             type=StreamEventType.RESPONSE_STARTED.value,
             sequence=sequence,
             provider=PROVIDER,
             response_id=response_id,
+            metadata=metadata,
             raw_event=event,
         )
     if event_type == "response.output_item.added":
@@ -56,25 +61,73 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             response_id=response_id,
             item_id=_get_attr(item, "id", item_id),
             item=normalized_item,
+            metadata=metadata,
             raw_event=event,
         )
     if event_type == "response.output_item.done":
+        item = _get_attr(event, "item", None)
+        normalized_item = None
+        if _get_attr(item, "type", None) == "function_call":
+            normalized_item = FunctionCallItem(
+                id=_get_attr(item, "id", None),
+                name=_get_attr(item, "name", ""),
+                arguments=_get_attr(item, "arguments", ""),
+                call_id=_get_attr(item, "call_id", ""),
+                status=_get_attr(item, "status", None),
+            )
         return GenerationStreamEvent(
             type=StreamEventType.ITEM_COMPLETED.value,
             sequence=sequence,
             provider=PROVIDER,
             response_id=response_id,
-            item_id=_get_attr(_get_attr(event, "item", None), "id", item_id),
+            item_id=_get_attr(item, "id", item_id),
+            item=normalized_item,
+            metadata=metadata,
+            raw_event=event,
+        )
+    if event_type == "response.content_part.added":
+        return GenerationStreamEvent(
+            type=StreamEventType.CONTENT_PART_CREATED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "part", None),
+            metadata=metadata,
+            raw_event=event,
+        )
+    if event_type == "response.content_part.done":
+        return GenerationStreamEvent(
+            type=StreamEventType.CONTENT_PART_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "part", None),
+            metadata=metadata,
             raw_event=event,
         )
     if event_type in {"response.output_text.delta", "response.text.delta"}:
         return GenerationStreamEvent(
-            type=StreamEventType.ITEM_DELTA.value,
+            type=StreamEventType.TEXT_DELTA.value,
             sequence=sequence,
             provider=PROVIDER,
             response_id=response_id,
             item_id=item_id,
             delta=_get_attr(event, "delta", ""),
+            metadata={**metadata, "semantic_type": StreamEventType.ITEM_DELTA.value},
+            raw_event=event,
+        )
+    if event_type == "response.output_text.done":
+        text = _get_attr(event, "text", None)
+        return GenerationStreamEvent(
+            type=StreamEventType.TEXT_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=text,
+            metadata=metadata,
             raw_event=event,
         )
     if event_type in {"response.function_call_arguments.delta", "response.tool_call.delta"}:
@@ -85,6 +138,7 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             response_id=response_id,
             item_id=item_id,
             delta=_get_attr(event, "delta", ""),
+            metadata=metadata,
             raw_event=event,
         )
     if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
@@ -95,6 +149,73 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             response_id=response_id,
             item_id=item_id,
             delta=_get_attr(event, "arguments", None),
+            metadata=metadata,
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_summary_part.added":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_CREATED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "part", None),
+            metadata={**metadata, "reasoning_kind": "summary"},
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_summary_part.done":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "part", None),
+            metadata={**metadata, "reasoning_kind": "summary"},
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_summary_text.delta":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_DELTA.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "delta", ""),
+            metadata={**metadata, "reasoning_kind": "summary"},
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_summary_text.done":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "text", None),
+            metadata={**metadata, "reasoning_kind": "summary"},
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_text.delta":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_DELTA.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "delta", ""),
+            metadata={**metadata, "reasoning_kind": "text"},
+            raw_event=event,
+        )
+    if event_type == "response.reasoning_text.done":
+        return GenerationStreamEvent(
+            type=StreamEventType.REASONING_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "text", None),
+            metadata={**metadata, "reasoning_kind": "text"},
             raw_event=event,
         )
     if event_type == "response.usage.updated":
@@ -104,6 +225,7 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             provider=PROVIDER,
             response_id=response_id,
             usage=usage_from_openai(_get_attr(event, "usage", None)),
+            metadata=metadata,
             raw_event=event,
         )
     if event_type == "response.completed":
@@ -115,16 +237,45 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             response_id=_get_attr(response, "id", response_id),
             response=_safe_response(response),
             usage=usage_from_openai(_get_attr(response, "usage", None)),
+            metadata=metadata,
             raw_event=event,
         )
-    if event_type in {"response.failed", "error"}:
+    if event_type == "response.incomplete":
+        response = _get_attr(event, "response", None)
+        return GenerationStreamEvent(
+            type=StreamEventType.RESPONSE_INCOMPLETE.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=_get_attr(response, "id", response_id),
+            response=_safe_response(response),
+            usage=usage_from_openai(_get_attr(response, "usage", None)),
+            metadata=metadata,
+            raw_event=event,
+        )
+    if event_type == "response.failed":
         error = _get_attr(event, "error", None)
+        response = _get_attr(event, "response", None)
+        if error is None and response is not None:
+            error = _get_attr(response, "error", None)
         return GenerationStreamEvent(
             type=StreamEventType.RESPONSE_FAILED.value,
             sequence=sequence,
             provider=PROVIDER,
             response_id=response_id,
             error=str(error) if error is not None else None,
+            response=_safe_response(response),
+            metadata=metadata,
+            raw_event=event,
+        )
+    if event_type in {"response.error", "error"}:
+        error = _get_attr(event, "error", None)
+        return GenerationStreamEvent(
+            type=StreamEventType.RESPONSE_ERROR.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            error=str(error) if error is not None else None,
+            metadata=metadata,
             raw_event=event,
         )
     return GenerationStreamEvent(
@@ -133,7 +284,7 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
         provider=PROVIDER,
         response_id=response_id,
         item_id=item_id,
-        metadata={"provider_event_type": event_type},
+        metadata=metadata,
         raw_event=event,
     )
 
@@ -161,3 +312,12 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+
+def _metadata_from_event(event: Any, event_type: str | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"provider_event_type": event_type}
+    for name in ("sequence_number", "output_index", "content_index", "status", "call_id", "name"):
+        value = _get_attr(event, name, None)
+        if value is not None:
+            metadata[name] = value
+    return metadata

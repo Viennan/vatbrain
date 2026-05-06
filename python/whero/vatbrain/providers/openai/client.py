@@ -27,6 +27,7 @@ from whero.vatbrain.providers.openai.capabilities import (
     get_model_capability,
 )
 from whero.vatbrain.providers.openai.mapper import (
+    PROVIDER,
     from_openai_embedding_response,
     from_openai_generation_response,
     to_openai_embedding_params,
@@ -95,7 +96,7 @@ class OpenAIClient:
         try:
             response = self._sync_client.responses.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI generation request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI generation request failed.", "responses.create", exc) from exc
         return from_openai_generation_response(response)
 
     async def agenerate(
@@ -124,7 +125,7 @@ class OpenAIClient:
         try:
             response = await self._async_openai_client.responses.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI async generation request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI async generation request failed.", "responses.create", exc) from exc
         return from_openai_generation_response(response)
 
     def stream_generate(
@@ -155,7 +156,7 @@ class OpenAIClient:
         try:
             stream = self._sync_client.responses.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI stream generation request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI stream generation request failed.", "responses.create", exc) from exc
         for sequence, event in enumerate(stream):
             yield from_openai_stream_event(event, sequence=sequence)
 
@@ -187,7 +188,7 @@ class OpenAIClient:
         try:
             stream = await self._async_openai_client.responses.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI async stream generation request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI async stream generation request failed.", "responses.create", exc) from exc
         sequence = 0
         async for event in stream:
             yield from_openai_stream_event(event, sequence=sequence)
@@ -213,7 +214,7 @@ class OpenAIClient:
         try:
             response = self._sync_client.embeddings.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI embedding request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI embedding request failed.", "embeddings.create", exc) from exc
         return from_openai_embedding_response(response)
 
     async def aembed(
@@ -236,7 +237,7 @@ class OpenAIClient:
         try:
             response = await self._async_openai_client.embeddings.create(**params)
         except Exception as exc:
-            raise ProviderRequestError("OpenAI async embedding request failed.", cause=exc) from exc
+            raise _provider_request_error("OpenAI async embedding request failed.", "embeddings.create", exc) from exc
         return from_openai_embedding_response(response)
 
     def get_adapter_capability(self) -> AdapterCapability:
@@ -296,3 +297,45 @@ def _merge_client_options(
     if resolved_max_retries is not None:
         options["max_retries"] = resolved_max_retries
     return options
+
+
+def _provider_request_error(message: str, operation: str, exc: BaseException) -> ProviderRequestError:
+    body = _get_error_body(exc)
+    error_payload = _get_error_payload(body)
+    return ProviderRequestError(
+        message,
+        provider=PROVIDER,
+        operation=operation,
+        status_code=_get_attr(exc, "status_code", None),
+        request_id=_get_attr(exc, "request_id", _get_attr(exc, "x_request_id", None)),
+        error_type=_get_attr(error_payload, "type", None),
+        error_code=_get_attr(error_payload, "code", None),
+        error_param=_get_attr(error_payload, "param", None),
+        raw=body,
+        cause=exc,
+    )
+
+
+def _get_error_body(exc: BaseException) -> Any:
+    body = _get_attr(exc, "body", None)
+    if body is not None:
+        return body
+    response = _get_attr(exc, "response", None)
+    if response is not None:
+        try:
+            return response.json()
+        except Exception:
+            return response
+    return None
+
+
+def _get_error_payload(body: Any) -> Any:
+    if isinstance(body, Mapping):
+        return body.get("error", body)
+    return body
+
+
+def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(name, default)
+    return getattr(obj, name, default)

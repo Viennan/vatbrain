@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from whero.vatbrain import ClientConfig, MessageItem, ReasoningConfig, ToolCallConfig
+from whero.vatbrain.core.errors import ProviderRequestError
+from whero.vatbrain.core.generation import StreamEventType
 from whero.vatbrain.providers.openai import OpenAIClient
 
 
@@ -14,6 +16,14 @@ class FakeResponses:
     def create(self, **kwargs: object) -> object:
         self.calls.append(kwargs)
         return self.result
+
+
+class RaisingResponses:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def create(self, **kwargs: object) -> object:
+        raise self.exc
 
 
 class FakeEmbeddings:
@@ -30,6 +40,24 @@ class FakeOpenAI:
     def __init__(self, *, response: object, embedding: object | None = None) -> None:
         self.responses = FakeResponses(response)
         self.embeddings = FakeEmbeddings(embedding or SimpleNamespace(data=[], usage=None))
+
+
+class FakeOpenAIRaising:
+    def __init__(self, exc: Exception) -> None:
+        self.responses = RaisingResponses(exc)
+        self.embeddings = FakeEmbeddings(SimpleNamespace(data=[], usage=None))
+
+
+class FakeOpenAIError(Exception):
+    status_code = 400
+    request_id = "req_1"
+    body = {
+        "error": {
+            "type": "invalid_request_error",
+            "code": "bad_param",
+            "param": "stream_options",
+        }
+    }
 
 
 def test_client_generate_uses_explicit_model_and_common_options() -> None:
@@ -72,6 +100,7 @@ def test_client_stream_generate_maps_events() -> None:
 
     assert fake.responses.calls[0]["stream"] is True
     assert events[0].delta == "hi"
+    assert events[0].type == StreamEventType.TEXT_DELTA.value
 
 
 def test_client_embed_uses_embedding_endpoint() -> None:
@@ -120,3 +149,22 @@ def test_client_reads_provider_scoped_vatbrain_env_api_key(monkeypatch) -> None:
     client = OpenAIClient()
 
     assert client._client_options["api_key"] == "env-key"
+
+
+def test_client_request_error_is_wrapped_with_provider_details() -> None:
+    exc = FakeOpenAIError("bad request")
+    client = OpenAIClient(client=FakeOpenAIRaising(exc), async_client=object())
+
+    try:
+        client.generate(model="gpt-test", items=[MessageItem.user("hello")])
+    except ProviderRequestError as wrapped:
+        assert wrapped.cause is exc
+        assert wrapped.details.provider == "openai"
+        assert wrapped.details.operation == "responses.create"
+        assert wrapped.details.status_code == 400
+        assert wrapped.details.request_id == "req_1"
+        assert wrapped.details.error_type == "invalid_request_error"
+        assert wrapped.details.error_code == "bad_param"
+        assert wrapped.details.error_param == "stream_options"
+    else:
+        raise AssertionError("Expected ProviderRequestError")

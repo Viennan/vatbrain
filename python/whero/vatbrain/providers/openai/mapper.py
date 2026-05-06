@@ -57,8 +57,6 @@ def to_openai_generation_params(request: GenerationRequest, *, stream: bool = Fa
             params["reasoning"] = reasoning
     if request.tool_call_config:
         params.update(_tool_call_config_to_params(request.tool_call_config))
-    if request.stream_options and request.stream_options.include_usage is not None:
-        params.setdefault("stream_options", {})["include_usage"] = request.stream_options.include_usage
     params.update(request.provider_options)
     return params
 
@@ -81,14 +79,31 @@ def to_openai_embedding_params(request: EmbeddingRequest) -> dict[str, Any]:
 def from_openai_generation_response(response: Any) -> GenerationResponse:
     """Convert an OpenAI Responses API response into a vatbrain response."""
 
-    output_items = tuple(_openai_output_item_to_item(item) for item in _get_attr(response, "output", []) or [])
+    output_items: list[Item] = []
+    unsupported_output_items: list[dict[str, Any]] = []
+    for item in _get_attr(response, "output", []) or []:
+        try:
+            output_items.append(_openai_output_item_to_item(item))
+        except ProviderResponseMappingError:
+            unsupported_output_items.append(_unsupported_output_item_summary(item))
+    if unsupported_output_items and not output_items:
+        raise ProviderResponseMappingError(
+            "OpenAI response contains only unsupported output item types.",
+            provider=PROVIDER,
+            operation="responses.create",
+            raw=response,
+        )
+    metadata: dict[str, Any] = {}
+    if unsupported_output_items:
+        metadata["unsupported_output_items"] = unsupported_output_items
     return GenerationResponse(
         id=_get_attr(response, "id", None),
         provider=PROVIDER,
         model=_get_attr(response, "model", None),
-        output_items=output_items,
+        output_items=tuple(output_items),
         stop_reason=_get_attr(response, "status", None),
         usage=usage_from_openai(_get_attr(response, "usage", None)),
+        metadata=metadata,
         raw=response,
     )
 
@@ -215,9 +230,42 @@ def _generation_config_to_params(config: GenerationConfig) -> dict[str, Any]:
 
 
 def _response_format_to_openai_text(response_format: ResponseFormat) -> dict[str, Any]:
-    if response_format.json_schema is not None:
-        return {"format": {"type": response_format.type, "schema": response_format.json_schema}}
-    return {"format": {"type": response_format.type}}
+    if response_format.type != "json_schema":
+        return {"format": {"type": response_format.type}}
+
+    if response_format.json_schema is None:
+        return {"format": {"type": "json_schema"}}
+
+    schema_payload = _json_schema_payload(response_format)
+    return {"format": schema_payload}
+
+
+def _json_schema_payload(response_format: ResponseFormat) -> dict[str, Any]:
+    schema = response_format.json_schema or {}
+    if _looks_like_openai_json_schema_wrapper(schema):
+        payload = dict(schema)
+        payload.setdefault("type", "json_schema")
+    else:
+        payload = {
+            "type": "json_schema",
+            "name": response_format.json_schema_name or "response",
+            "schema": schema,
+        }
+    if response_format.json_schema_name is not None:
+        payload["name"] = response_format.json_schema_name
+    if response_format.json_schema_description is not None:
+        payload["description"] = response_format.json_schema_description
+    if response_format.json_schema_strict is not None:
+        payload["strict"] = response_format.json_schema_strict
+    return payload
+
+
+def _looks_like_openai_json_schema_wrapper(schema: dict[str, Any]) -> bool:
+    return (
+        schema.get("type") == "json_schema"
+        and isinstance(schema.get("name"), str)
+        and isinstance(schema.get("schema"), dict)
+    )
 
 
 def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
@@ -248,17 +296,31 @@ def _tool_call_config_to_params(config: ToolCallConfig) -> dict[str, Any]:
 
 def _openai_output_item_to_item(item: Any) -> Item:
     item_type = _get_attr(item, "type", None)
-    if item_type == "message":
-        return _openai_message_to_item(item)
-    if item_type == "function_call":
-        return FunctionCallItem(
-            id=_get_attr(item, "id", None),
-            name=_get_attr(item, "name", ""),
-            arguments=_get_attr(item, "arguments", ""),
-            call_id=_get_attr(item, "call_id", ""),
-            status=_get_attr(item, "status", None),
-        )
-    raise ProviderResponseMappingError(f"Unsupported OpenAI output item type: {item_type!r}")
+    try:
+        if item_type == "message":
+            return _openai_message_to_item(item)
+        if item_type == "function_call":
+            return FunctionCallItem(
+                id=_get_attr(item, "id", None),
+                name=_get_attr(item, "name", ""),
+                arguments=_get_attr(item, "arguments", ""),
+                call_id=_get_attr(item, "call_id", ""),
+                status=_get_attr(item, "status", None),
+            )
+    except Exception as exc:
+        raise ProviderResponseMappingError(
+            f"Malformed OpenAI output item: {item_type!r}",
+            provider=PROVIDER,
+            operation="responses.create",
+            raw=item,
+            cause=exc,
+        ) from exc
+    raise ProviderResponseMappingError(
+        f"Unsupported OpenAI output item type: {item_type!r}",
+        provider=PROVIDER,
+        operation="responses.create",
+        raw=item,
+    )
 
 
 def _openai_message_to_item(item: Any) -> MessageItem:
@@ -305,6 +367,14 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+
+def _unsupported_output_item_summary(item: Any) -> dict[str, Any]:
+    return {
+        "id": _get_attr(item, "id", None),
+        "type": _get_attr(item, "type", None),
+        "status": _get_attr(item, "status", None),
+    }
 
 
 def json_arguments(arguments: Mapping[str, Any] | str) -> str:

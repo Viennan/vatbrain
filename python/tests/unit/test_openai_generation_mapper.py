@@ -2,18 +2,23 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from whero.vatbrain import (
     FunctionResultItem,
     GenerationConfig,
     GenerationRequest,
     MessageItem,
     ReasoningConfig,
+    ResponseFormat,
+    StreamOptions,
     TextPart,
     ToolCallConfig,
     ToolChoice,
     ToolSpec,
 )
 from whero.vatbrain.core.items import FunctionCallItem
+from whero.vatbrain.core.errors import ProviderResponseMappingError
 from whero.vatbrain.providers.openai.mapper import (
     from_openai_generation_response,
     to_openai_generation_params,
@@ -85,6 +90,106 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
     assert params["metadata"] == {"trace_id": "t-1"}
 
 
+def test_stream_options_include_usage_is_not_mapped_to_openai_stream_options() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        stream_options=StreamOptions(include_usage=True),
+    )
+
+    params = to_openai_generation_params(request, stream=True)
+
+    assert params["stream"] is True
+    assert "stream_options" not in params
+
+
+def test_provider_specific_stream_options_are_passthrough() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        provider_options={"stream_options": {"include_obfuscation": True}},
+    )
+
+    params = to_openai_generation_params(request, stream=True)
+
+    assert params["stream_options"] == {"include_obfuscation": True}
+
+
+def test_provider_options_override_default_params() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        generation_config=GenerationConfig(temperature=0.2),
+        provider_options={"temperature": 0.7},
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["temperature"] == 0.7
+
+
+def test_json_object_response_format_maps_to_text_format() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("json please")],
+        response_format=ResponseFormat(type="json_object"),
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["text"] == {"format": {"type": "json_object"}}
+
+
+def test_json_schema_response_format_maps_to_openai_text_format() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("extract")],
+        response_format=ResponseFormat(
+            type="json_schema",
+            json_schema=schema,
+            json_schema_name="person",
+            json_schema_description="A person record.",
+            json_schema_strict=True,
+        ),
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "person",
+            "description": "A person record.",
+            "schema": schema,
+            "strict": True,
+        }
+    }
+
+
+def test_legacy_openai_json_schema_wrapper_is_preserved() -> None:
+    wrapper = {
+        "type": "json_schema",
+        "name": "wrapped",
+        "schema": {"type": "object", "properties": {}},
+        "strict": False,
+    }
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("extract")],
+        response_format=ResponseFormat(type="json_schema", json_schema=wrapper),
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["text"] == {"format": wrapper}
+
+
 def test_openai_response_maps_message_function_call_and_usage() -> None:
     response = SimpleNamespace(
         id="resp_1",
@@ -133,3 +238,60 @@ def test_openai_response_maps_message_function_call_and_usage() -> None:
     assert mapped.usage.output_tokens == 5
     assert mapped.usage.cached_tokens == 3
     assert mapped.usage.reasoning_tokens == 2
+
+
+def test_openai_response_records_unsupported_output_items_when_other_items_map() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                id="msg_1",
+                role="assistant",
+                content=[SimpleNamespace(type="output_text", text="hello")],
+            ),
+            SimpleNamespace(type="reasoning", id="rs_1", status="completed"),
+        ],
+        usage=None,
+    )
+
+    mapped = from_openai_generation_response(response)
+
+    assert len(mapped.output_items) == 1
+    assert mapped.metadata["unsupported_output_items"] == [
+        {"id": "rs_1", "type": "reasoning", "status": "completed"}
+    ]
+
+
+def test_openai_response_raises_when_only_unsupported_items_are_returned() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[SimpleNamespace(type="reasoning", id="rs_1", status="completed")],
+        usage=None,
+    )
+
+    with pytest.raises(ProviderResponseMappingError) as exc_info:
+        from_openai_generation_response(response)
+
+    assert exc_info.value.details.provider == "openai"
+    assert exc_info.value.details.operation == "responses.create"
+
+
+def test_openai_response_raises_mapping_error_for_malformed_supported_item() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[SimpleNamespace(type="message", id="msg_1", role="not-a-role", content=[])],
+        usage=None,
+    )
+
+    with pytest.raises(ProviderResponseMappingError) as exc_info:
+        from_openai_generation_response(response)
+
+    assert exc_info.value.details.provider == "openai"
+    assert exc_info.value.details.raw is response

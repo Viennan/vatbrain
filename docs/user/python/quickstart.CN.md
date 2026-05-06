@@ -1,7 +1,8 @@
 # Python 用户指南
 
-状态：第一阶段  
+状态：v0.2  
 日期：2026-05-05
+最近更新：2026-05-06
 
 ## 编程模型
 
@@ -98,21 +99,38 @@ response = client.generate(
 
 ## 流式生成
 
-流式调用返回标准化事件：
+流式调用返回标准化事件。v0.2 起，文本增量事件使用更明确的 `text.delta` 类型；为了兼容旧代码，OpenAI 文本增量事件仍会在 metadata 中标记旧语义。
 
 ```python
-from whero.vatbrain import MessageItem, StreamOptions
+from whero.vatbrain import MessageItem
 
 for event in client.stream_generate(
     model="gpt-5.1",
     items=[MessageItem.user("Write a short haiku.")],
-    stream_options=StreamOptions(include_usage=True),
 ):
-    if event.type == "item.delta":
+    if event.type == "text.delta":
         print(event.delta, end="")
 ```
 
-事件中会保留 `raw_event`，用于访问尚未被 `vatbrain` 标准化的 provider 原始事件。
+事件中会保留 `raw_event`，用于访问尚未被 `vatbrain` 标准化的 provider 原始事件。OpenAI Responses API 的最终 usage 通常随 `response.completed` 或 `response.incomplete` 中的完整 response 返回；`StreamOptions(include_usage=True)` 不会被映射为 OpenAI `stream_options.include_usage`。
+
+如果需要从流式事件重建最终响应，可以使用 accumulator：
+
+```python
+from whero.vatbrain import GenerationStreamAccumulator, MessageItem
+
+accumulator = GenerationStreamAccumulator(provider="openai")
+
+for event in client.stream_generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Write a short haiku.")],
+):
+    accumulator.add(event)
+    if event.type == "text.delta":
+        print(event.delta, end="")
+
+response = accumulator.to_response()
+```
 
 异步流式调用：
 
@@ -122,6 +140,47 @@ async for event in client.astream_generate(
     items=[MessageItem.user("Write a short haiku.")],
 ):
     ...
+```
+
+## Structured Output
+
+OpenAI adapter 使用 Responses API 的 `text.format` 表达 JSON mode 与 JSON schema structured output。
+
+JSON object：
+
+```python
+from whero.vatbrain import MessageItem, ResponseFormat
+
+response = client.generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Return a JSON object with a short title.")],
+    response_format=ResponseFormat(type="json_object"),
+)
+```
+
+JSON schema：
+
+```python
+from whero.vatbrain import MessageItem, ResponseFormat
+
+response = client.generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Extract a contact.")],
+    response_format=ResponseFormat(
+        type="json_schema",
+        json_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "email": {"type": "string"},
+            },
+            "required": ["name", "email"],
+            "additionalProperties": False,
+        },
+        json_schema_name="contact",
+        json_schema_strict=True,
+    ),
+)
 ```
 
 ## 工具调用
@@ -249,7 +308,7 @@ response = client.generate(
 - 仅实现 OpenAI provider。
 - generation 使用 OpenAI Responses API。
 - embedding 仅支持文本输入。
-- streaming event 已覆盖主要事件，但不是完整 OpenAI 事件全集。
+- streaming event 已覆盖 OpenAI Responses API 的主要 lifecycle、text、function call、reasoning summary/text 与错误事件；未知事件会 raw passthrough。
 - capability 不维护内部权威模型能力表。
 - 不提供 routing、fallback、自动模型选择、自动工具执行或 agent loop。
 
