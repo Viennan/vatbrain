@@ -115,7 +115,6 @@ def test_generation_request_maps_remote_context_hint() -> None:
             previous_response_id="resp_1",
             covered_item_count=1,
             store=True,
-            cache_policy="24h",
             provider_options={"prompt_cache_key": "cache-key"},
         ),
     )
@@ -126,7 +125,6 @@ def test_generation_request_maps_remote_context_hint() -> None:
     assert len(params["input"]) == 1
     assert params["input"][0]["content"] == [{"type": "input_text", "text": "hello"}]
     assert params["store"] is True
-    assert params["prompt_cache_retention"] == "24h"
     assert params["prompt_cache_key"] == "cache-key"
 
 

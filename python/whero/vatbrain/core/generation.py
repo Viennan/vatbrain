@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from typing import Any, Iterable
 
@@ -53,13 +52,11 @@ class ReasoningConfig:
 
 @dataclass(frozen=True, slots=True)
 class RemoteContextHint:
-    """Provider-side context/cache hints that do not replace full context."""
+    """Provider-side previous response/store hints that do not replace full context."""
 
     previous_response_id: str | None = None
     covered_item_count: int | None = None
-    cache_policy: str | None = None
     store: bool | None = None
-    expires_at: datetime | str | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

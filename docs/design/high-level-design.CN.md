@@ -57,7 +57,7 @@
 
 provider 侧的 stored response、previous response、conversation、context cache 或其他上下文状态能力应被视为优化提示，而不是 `vatbrain` 的核心语义状态。
 
-`vatbrain` 可以允许用户显式传入远端上下文 hint，例如 previous response id、cache policy 或 store policy。adapter 可以利用这些 hint 降低成本或延迟，但调用语义仍应由用户传入的完整 `Item` 序列定义。provider conversation 这类持久化上下文暂不进入通用 core 抽象。
+`vatbrain` 可以允许用户显式传入远端上下文 hint，例如 previous response id 或 store policy。adapter 可以利用这些 hint 降低成本或延迟，但调用语义仍应由用户传入的完整 `Item` 序列定义。provider conversation 这类持久化上下文暂不进入通用 core 抽象。v0.3 暂不在通用 core 中表达 prompt/cache retention 与远端过期时间；这些 provider-specific 能力应通过 `provider_options` 透传。
 
 Full-context First 不等于每次 provider 请求都必须传输完整 input。若用户明确说明某个 `previous_response_id` 已覆盖完整 `items` 的前缀，adapter 可以只把未覆盖的追加 suffix 发送给 provider。该覆盖边界必须显式表达，例如通过 `RemoteContextHint.covered_item_count`；adapter 不能只凭 `previous_response_id` 猜测哪些 item 是 history、哪些 item 是新增输入。
 
@@ -143,7 +143,7 @@ generation 请求还应包含若干通用行为配置。凡是表达“用户希
 
 不同 provider/model 可以只支持其中一部分字段。adapter 负责将通用语义映射到厂商原生参数；无法映射时应基于 capability 与用户策略进行处理。
 
-provider 侧上下文状态可以通过 generation request 中的远端上下文 hint 表达，但只作为优化提示。即使某个 provider 支持 `previous_response_id` 或缓存，`vatbrain` 的推荐编程模型仍是由用户代码维护完整语义上下文。
+provider 侧上下文状态可以通过 generation request 中的远端上下文 hint 表达，但只作为优化提示。即使某个 provider 支持 `previous_response_id` 或缓存，`vatbrain` 的推荐编程模型仍是由用户代码维护完整语义上下文。v0.3 的通用 `RemoteContextHint` 暂不暴露 cache policy 或远端过期时间。
 
 ### Embedding
 
@@ -575,6 +575,8 @@ capability 是能力描述和校验辅助，不是自动决策机制。调用前
 ### 使用 previous response 时是否仍要把完整 items 全量传给 provider？
 
 不一定。用户侧仍应传入完整 `items`，但 adapter 可以在 provider 请求层做增量传输优化：当 `RemoteContextHint.previous_response_id` 存在，并且用户明确提供 `covered_item_count` 说明该 response id 已覆盖完整 `items` 的前缀时，adapter 可以按 provider 语义只发送未覆盖的追加 suffix。对 OpenAI Responses adapter 来说，存在 `previous_response_id` 时应发送增量 input；若 previous response 失效并且用户启用 fallback，adapter 必须移除失效 hint，并重新发送完整 `items`。
+
+使用 `previous_response_id` 时，需要保证被引用的上一轮 response 在生成时已被 provider 存储。`RemoteContextHint.store=None` 表示本轮调用不显式指定存储策略，依赖 provider 默认行为；本轮是否设置 `store=True` 只决定本轮 response 是否适合作为未来调用的 `previous_response_id`。
 
 ### response id 失效后是否应该自动重放？
 

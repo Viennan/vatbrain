@@ -6,7 +6,7 @@
 
 ## 背景
 
-`vatbrain` 坚持 Full-context First：一次 generation 调用的语义事实来源应是用户传入的完整 `Item` 序列。provider 的 `previous_response_id`、cache、stored response 或 conversation state 只能作为优化提示，不能成为唯一上下文来源。
+`vatbrain` 坚持 Full-context First：一次 generation 调用的语义事实来源应是用户传入的完整 `Item` 序列。provider 的 `previous_response_id`、cache、stored response 或 conversation state 只能作为优化提示，不能成为唯一上下文来源。v0.3 的 `RemoteContextHint` 暂不表达 cache policy 或远端过期时间。
 
 但不同 provider 的 Responses 风格 API 往往会在 input/output item 上携带对重放很关键的原生字段。OpenAI Responses API 的 assistant message `phase` 就是一个典型例子。它区分 `commentary` 与 `final_answer` 阶段；在 follow-up/replay 时丢失该字段，可能导致模型错误判断历史消息阶段，甚至提前终止。
 
@@ -123,15 +123,15 @@ ReplayPolicy
 RemoteContextHint
 - previous_response_id
 - covered_item_count: int | None
-- cache_policy
 - store
-- expires_at
 - provider_options
 ```
 
 `covered_item_count` 表示完整 `GenerationRequest.items` 中从开头开始已有多少个 item 被 `previous_response_id` 覆盖。例如 `covered_item_count=6` 表示 `items[:6]` 已在 provider 侧上下文中，本次差分传输只应发送 `items[6:]`。
 
 选择前缀计数而不是 item 级标记，是因为 remote context 覆盖关系依赖具体 provider response id，不是 item 自身的永久属性。`ItemPurpose.CONTEXT`、`ItemPurpose.ANSWER` 等字段表达语义用途，也不适合作为传输边界。
+
+`store` 表达的是本轮 response 是否请求 provider 存储。`store=None` 表示 `vatbrain` 不显式传递存储偏好，依赖 provider 默认实现。使用 `previous_response_id` 时，需要保证被引用的历史 response 在生成时已经开启存储；本轮 `store=True` 只会让本轮 response 更适合未来被引用，不能补救历史 response 未存储的问题。
 
 约束：
 

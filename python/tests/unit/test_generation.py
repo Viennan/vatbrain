@@ -16,7 +16,6 @@ def test_generation_request_accepts_remote_context_hint() -> None:
     remote_context = RemoteContextHint(
         previous_response_id="resp_1",
         covered_item_count=1,
-        cache_policy="24h",
         store=True,
         provider_options={"prompt_cache_key": "k"},
     )

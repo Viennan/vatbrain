@@ -97,22 +97,37 @@ response = client.generate(
 
 `reasoning` 和 `parallel_tool_calls` 是通用 generation 配置，不是 OpenAI 专有选项。不同 provider/model 可能只支持其中一部分字段。
 
-v0.3 新增 `RemoteContextHint`，用于显式表达 provider 侧 previous response、cache 或 store hint。这只是优化提示，不改变 Full-context First，也不表示 `vatbrain` 使用 provider conversation 持久化上下文：
+v0.3 新增 `RemoteContextHint`，用于显式表达 provider 侧 previous response 与 store hint。这只是优化提示，不改变 Full-context First，也不表示 `vatbrain` 使用 provider conversation 持久化上下文：
 
 ```python
 from whero.vatbrain import MessageItem, RemoteContextHint
 
+first_items = [MessageItem.user("Summarize the contract.")]
+
+first_response = client.generate(
+    model="gpt-5.1",
+    items=first_items,
+    remote_context=RemoteContextHint(store=True),
+)
+
+history_items = [*first_items, *first_response.output_items]
+items = [*history_items, MessageItem.user("Now extract the termination clause.")]
+
 response = client.generate(
     model="gpt-5.1",
-    items=[MessageItem.user("Continue with the full context I provide.")],
+    items=items,
     remote_context=RemoteContextHint(
-        previous_response_id="resp_previous",
-        store=True,
+        previous_response_id=first_response.id,
+        covered_item_count=len(history_items),
     ),
 )
 ```
 
 OpenAI adapter 会映射 `previous_response_id` 与 `store`；provider conversation 这类持久化上下文能力暂不进入 core。
+
+`store=None` 表示不由 `vatbrain` 显式指定存储策略，而是交给 provider 默认行为。本轮是否设置 `store=True` 只影响“本轮 response 是否便于未来作为 `previous_response_id` 被引用”；使用某个 `previous_response_id` 时，需要确保那个 id 对应 response 在生成时已开启存储，例如当时使用了 `RemoteContextHint(store=True)`，或用户明确依赖该 provider 的默认存储行为。
+
+上例中，`first_response.id` 对应的 provider response 覆盖了第一轮输入 `first_items` 与第一轮输出 `first_response.output_items`，所以第二轮完整上下文的 history 前缀是 `history_items`，`covered_item_count` 应为 `len(history_items)`。`items[len(history_items):]` 才是本轮追加的新输入。
 
 用户侧仍应传入完整 `items`。如果 `previous_response_id` 对应的 provider response 已覆盖完整上下文中的历史前缀，可以用 `covered_item_count` 显式说明覆盖范围；adapter 才能在 provider 请求层只发送追加 items：
 

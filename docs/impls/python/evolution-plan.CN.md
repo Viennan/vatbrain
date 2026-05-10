@@ -62,9 +62,11 @@ OpenAI、火山方舟等同时支持 Responses API 与 Chat Completions API 的 
 
 即使 provider 支持 `previous_response_id`、stored response、context cache 或 conversation，Python API 的推荐编程模型仍是用户传入完整语义上下文。
 
-provider-side state 通过 `RemoteContextHint` 或 `provider_options` 的明确字段表达，仅作为优化提示。v0.3 的 `RemoteContextHint` 暂不表达 provider conversation 持久化上下文。
+provider-side state 通过 `RemoteContextHint` 或 `provider_options` 的明确字段表达，仅作为优化提示。v0.3 的 `RemoteContextHint` 暂不表达 provider conversation 持久化上下文，也暂不表达 cache policy 或远端过期时间。
 
 当使用 `previous_response_id` 优化请求时，用户仍传入完整 `items`。如果 provider response 已覆盖其中的历史前缀，应通过 `RemoteContextHint.covered_item_count` 显式说明覆盖范围；adapter 才能在 provider 请求层只发送追加 suffix。覆盖范围缺失时不得猜测 history/append 边界。
+
+`RemoteContextHint.store=None` 表示不显式指定本轮 response 的存储策略，依赖 provider 默认行为。使用某个 `previous_response_id` 时，需要保证被引用 response 在生成时已开启存储；本轮 `store=True` 只影响本轮 response 未来是否适合作为 previous response 被引用。
 
 当 `previous_response_id` 或 provider-side context 失效时，Python client 不应默认静默重试。后续版本应提供显式 replay policy：用户可以选择仅抛错、移除失效 remote context 后用完整 `items` 重放，或要求强制 provider-native replay。完整设计见 [design/provider-native-replay.CN.md](design/provider-native-replay.CN.md)。
 
@@ -305,8 +307,8 @@ python/tests/unit/test_*.py
 - function tools。
 - function call output。
 - `RemoteContextHint.previous_response_id`。
-- `RemoteContextHint.cache_policy` -> `caching`。
 - `RemoteContextHint.store` -> `store`。
+- cache/caching 暂不进入 `RemoteContextHint`，需要时通过 `provider_options` 透传。
 - structured output via `text.format`。
 - usage mapping。
 

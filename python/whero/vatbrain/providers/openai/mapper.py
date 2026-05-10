@@ -332,8 +332,6 @@ def _remote_context_to_openai(
         params["previous_response_id"] = remote_context.previous_response_id
     if remote_context.store is not None:
         params["store"] = remote_context.store
-    if remote_context.cache_policy is not None:
-        params["prompt_cache_retention"] = remote_context.cache_policy
     return params
 
 

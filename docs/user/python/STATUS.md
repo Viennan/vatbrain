@@ -13,6 +13,7 @@
 - 说明 provider-native snapshot、ReplayPolicy、OpenAI `phase` 保真、`AssistantMessagePhase` 基础用法和 response id 失效 fallback。
 - 说明 v0.3 新增 core models、RemoteContextHint、多模态 embedding 表达，以及这些模型与当前 OpenAI adapter 支持范围的边界。
 - 说明 `previous_response_id` 优化下仍需传入完整 `items`，并用 `RemoteContextHint.covered_item_count` 表达远端已覆盖的历史前缀。
+- 说明 `RemoteContextHint.store=None` 依赖 provider 默认存储策略；引用 `previous_response_id` 时，需要确保被引用 response 生成时已开启存储。
 - 说明 provider-hosted tool、remote tool、MCP tool 和 provider conversation 持久化上下文暂不作为通用 core 抽象暴露。
 
 ## 待完善
