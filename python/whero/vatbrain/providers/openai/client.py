@@ -17,6 +17,8 @@ from whero.vatbrain.core.generation import (
     GenerationStreamEvent,
     ReasoningConfig,
     RemoteContextHint,
+    RemoteContextInvalidBehavior,
+    ReplayPolicy,
     ResponseFormat,
     StreamOptions,
     ToolCallConfig,
@@ -82,6 +84,7 @@ class OpenAIClient:
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
         remote_context: RemoteContextHint | None = None,
+        replay_policy: ReplayPolicy | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> GenerationResponse:
         request = GenerationRequest(
@@ -93,13 +96,10 @@ class OpenAIClient:
             reasoning=reasoning,
             tool_call_config=tool_call_config,
             remote_context=remote_context,
+            replay_policy=replay_policy,
             provider_options=provider_options,
         )
-        params = to_openai_generation_params(request)
-        try:
-            response = self._sync_client.responses.create(**params)
-        except Exception as exc:
-            raise _provider_request_error("OpenAI generation request failed.", "responses.create", exc) from exc
+        response = self._create_generation_response(request, message="OpenAI generation request failed.")
         return from_openai_generation_response(response)
 
     async def agenerate(
@@ -113,6 +113,7 @@ class OpenAIClient:
         reasoning: ReasoningConfig | None = None,
         tool_call_config: ToolCallConfig | None = None,
         remote_context: RemoteContextHint | None = None,
+        replay_policy: ReplayPolicy | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> GenerationResponse:
         request = GenerationRequest(
@@ -124,13 +125,13 @@ class OpenAIClient:
             reasoning=reasoning,
             tool_call_config=tool_call_config,
             remote_context=remote_context,
+            replay_policy=replay_policy,
             provider_options=provider_options,
         )
-        params = to_openai_generation_params(request)
-        try:
-            response = await self._async_openai_client.responses.create(**params)
-        except Exception as exc:
-            raise _provider_request_error("OpenAI async generation request failed.", "responses.create", exc) from exc
+        response = await self._acreate_generation_response(
+            request,
+            message="OpenAI async generation request failed.",
+        )
         return from_openai_generation_response(response)
 
     def stream_generate(
@@ -145,6 +146,7 @@ class OpenAIClient:
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
         remote_context: RemoteContextHint | None = None,
+        replay_policy: ReplayPolicy | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> Iterator[GenerationStreamEvent]:
         request = GenerationRequest(
@@ -157,13 +159,10 @@ class OpenAIClient:
             tool_call_config=tool_call_config,
             stream_options=stream_options,
             remote_context=remote_context,
+            replay_policy=replay_policy,
             provider_options=provider_options,
         )
-        params = to_openai_generation_params(request, stream=True)
-        try:
-            stream = self._sync_client.responses.create(**params)
-        except Exception as exc:
-            raise _provider_request_error("OpenAI stream generation request failed.", "responses.create", exc) from exc
+        stream = self._create_generation_stream(request, message="OpenAI stream generation request failed.")
         for sequence, event in enumerate(stream):
             yield from_openai_stream_event(event, sequence=sequence)
 
@@ -179,6 +178,7 @@ class OpenAIClient:
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
         remote_context: RemoteContextHint | None = None,
+        replay_policy: ReplayPolicy | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[GenerationStreamEvent]:
         request = GenerationRequest(
@@ -191,13 +191,13 @@ class OpenAIClient:
             tool_call_config=tool_call_config,
             stream_options=stream_options,
             remote_context=remote_context,
+            replay_policy=replay_policy,
             provider_options=provider_options,
         )
-        params = to_openai_generation_params(request, stream=True)
-        try:
-            stream = await self._async_openai_client.responses.create(**params)
-        except Exception as exc:
-            raise _provider_request_error("OpenAI async stream generation request failed.", "responses.create", exc) from exc
+        stream = await self._acreate_generation_stream(
+            request,
+            message="OpenAI async stream generation request failed.",
+        )
         sequence = 0
         async for event in stream:
             yield from_openai_stream_event(event, sequence=sequence)
@@ -263,6 +263,58 @@ class OpenAIClient:
             merged_overrides.update(dict(overrides))
         return get_model_capability(model, overrides=merged_overrides or None)
 
+    def _create_generation_response(self, request: GenerationRequest, *, message: str) -> Any:
+        params = to_openai_generation_params(request)
+        try:
+            return self._sync_client.responses.create(**params)
+        except Exception as exc:
+            if not _should_replay_without_remote_context(request, exc):
+                raise _provider_request_error(message, "responses.create", exc) from exc
+            retry_params = to_openai_generation_params(request, use_remote_context=False)
+            try:
+                return self._sync_client.responses.create(**retry_params)
+            except Exception as retry_exc:
+                raise _provider_request_error(message, "responses.create", retry_exc) from retry_exc
+
+    async def _acreate_generation_response(self, request: GenerationRequest, *, message: str) -> Any:
+        params = to_openai_generation_params(request)
+        try:
+            return await self._async_openai_client.responses.create(**params)
+        except Exception as exc:
+            if not _should_replay_without_remote_context(request, exc):
+                raise _provider_request_error(message, "responses.create", exc) from exc
+            retry_params = to_openai_generation_params(request, use_remote_context=False)
+            try:
+                return await self._async_openai_client.responses.create(**retry_params)
+            except Exception as retry_exc:
+                raise _provider_request_error(message, "responses.create", retry_exc) from retry_exc
+
+    def _create_generation_stream(self, request: GenerationRequest, *, message: str) -> Any:
+        params = to_openai_generation_params(request, stream=True)
+        try:
+            return self._sync_client.responses.create(**params)
+        except Exception as exc:
+            if not _should_replay_without_remote_context(request, exc):
+                raise _provider_request_error(message, "responses.create", exc) from exc
+            retry_params = to_openai_generation_params(request, stream=True, use_remote_context=False)
+            try:
+                return self._sync_client.responses.create(**retry_params)
+            except Exception as retry_exc:
+                raise _provider_request_error(message, "responses.create", retry_exc) from retry_exc
+
+    async def _acreate_generation_stream(self, request: GenerationRequest, *, message: str) -> Any:
+        params = to_openai_generation_params(request, stream=True)
+        try:
+            return await self._async_openai_client.responses.create(**params)
+        except Exception as exc:
+            if not _should_replay_without_remote_context(request, exc):
+                raise _provider_request_error(message, "responses.create", exc) from exc
+            retry_params = to_openai_generation_params(request, stream=True, use_remote_context=False)
+            try:
+                return await self._async_openai_client.responses.create(**retry_params)
+            except Exception as retry_exc:
+                raise _provider_request_error(message, "responses.create", retry_exc) from retry_exc
+
     @property
     def _sync_client(self) -> Any:
         if self._client is None:
@@ -324,6 +376,40 @@ def _provider_request_error(message: str, operation: str, exc: BaseException) ->
         cause=exc,
     )
 
+
+def _should_replay_without_remote_context(request: GenerationRequest, exc: BaseException) -> bool:
+    if request.remote_context is None or request.remote_context.previous_response_id is None:
+        return False
+    if request.replay_policy is None:
+        return False
+    if request.replay_policy.on_remote_context_invalid != RemoteContextInvalidBehavior.REPLAY_WITHOUT_REMOTE_CONTEXT:
+        return False
+    return _is_remote_context_invalid_error(exc)
+
+
+def _is_remote_context_invalid_error(exc: BaseException) -> bool:
+    body = _get_error_body(exc)
+    error_payload = _get_error_payload(body)
+    error_param = str(_get_attr(error_payload, "param", "") or "").lower()
+    if error_param in {"previous_response_id", "previous_response"}:
+        return True
+    haystack = " ".join(
+        str(value or "").lower()
+        for value in (
+            _get_attr(error_payload, "code", None),
+            _get_attr(error_payload, "type", None),
+            _get_attr(error_payload, "message", None),
+            _get_attr(exc, "message", None),
+            str(exc),
+        )
+    )
+    return (
+        "previous_response_id" in haystack
+        or "previous response" in haystack
+        or ("response" in haystack and "expired" in haystack)
+        or ("context" in haystack and "expired" in haystack)
+        or ("context" in haystack and "invalid" in haystack)
+    )
 
 def _get_error_body(exc: BaseException) -> Any:
     body = _get_attr(exc, "body", None)

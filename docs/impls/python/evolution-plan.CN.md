@@ -2,7 +2,7 @@
 
 状态：演进计划  
 日期：2026-05-06  
-最近更新：2026-05-06
+最近更新：2026-05-10
 
 ## 背景
 
@@ -63,6 +63,10 @@ OpenAI、火山方舟等同时支持 Responses API 与 Chat Completions API 的 
 即使 provider 支持 `previous_response_id`、stored response、context cache 或 conversation，Python API 的推荐编程模型仍是用户传入完整语义上下文。
 
 provider-side state 通过 `RemoteContextHint` 或 `provider_options` 的明确字段表达，仅作为优化提示。v0.3 的 `RemoteContextHint` 暂不表达 provider conversation 持久化上下文。
+
+当使用 `previous_response_id` 优化请求时，用户仍传入完整 `items`。如果 provider response 已覆盖其中的历史前缀，应通过 `RemoteContextHint.covered_item_count` 显式说明覆盖范围；adapter 才能在 provider 请求层只发送追加 suffix。覆盖范围缺失时不得猜测 history/append 边界。
+
+当 `previous_response_id` 或 provider-side context 失效时，Python client 不应默认静默重试。后续版本应提供显式 replay policy：用户可以选择仅抛错、移除失效 remote context 后用完整 `items` 重放，或要求强制 provider-native replay。完整设计见 [design/provider-native-replay.CN.md](design/provider-native-replay.CN.md)。
 
 ### 小步发布，测试闭环
 
@@ -167,6 +171,7 @@ ItemKind
 扩展 `core.generation`：
 
 - `RemoteContextHint`
+- `ReplayPolicy` 与 provider-native replay 策略
 - `ReasoningConfig.mode`
 - 更明确的 `ReasoningConfig.effort`
 - `ResponseFormat` 的 JSON schema name/description/schema/strict
@@ -246,6 +251,7 @@ ModelCapability
 - 不要求 OpenAI adapter 立刻支持所有新增 part。
 - 不实现 Volcengine API 调用。
 - 不实现自动工具执行。
+- 不实现 response id 失效后的自动 retry/fallback；provider-native replay 基础能力先服务 OpenAI 同 provider 重放。
 
 #### 主要文件
 
@@ -355,9 +361,26 @@ python/tests/unit/test_*.py
 
 model capability 仍默认 unknown，允许用户 overrides。
 
+##### Replay
+
+Provider-native replay 基础能力已优先在 OpenAI adapter 上实现；v0.4 可根据 OpenAI 实现经验决定 Volcengine 是否同步支持：
+
+- 已新增 `ProviderItemSnapshot`，保存同 provider/API family 的原始 item payload。
+- 已新增 `ReplayPolicy`，支持 `normalized_only`、`prefer_provider_native`、`require_provider_native`。
+- 已支持 `require_provider_native` 作为强制 replay 选项，缺少可重放 snapshot 时抛错。
+- 已支持 `on_remote_context_invalid="replay_without_remote_context"`；默认 `raise`，只有用户显式启用时才清除失效 `previous_response_id` 并用完整 `items` 重试一次。
+- OpenAI Responses assistant message 的 `phase` 已通过 snapshot 保真，并已通过 `AssistantMessagePhase(commentary | final_answer)` 进入通用 `MessageItem`。
+- 跨 provider replay 暂不支持，记录为长期 TODO。
+
+待补充：
+
+- `RemoteContextHint.covered_item_count`，用于表达 `previous_response_id` 覆盖完整 `items` 的前缀长度。
+- OpenAI provider 差分传输：存在 `previous_response_id` 且覆盖边界明确时发送 suffix，失效 fallback 重新构造完整 input。
+
 #### 非范围
 
 - 不支持 Chat Completions API。
+- 不支持跨 provider replay。
 - 不自动执行 function tools。
 - 不自动 provider routing。
 - 不自动上传本地文件，除非用户显式调用 file API。
@@ -529,6 +552,12 @@ docs/user/python/volcengine-quickstart.CN.md
 
 如 image process、knowledge search、MCP、video generation 高级参数，短期可以通过 provider-specific model 或 provider_options 表达。只有具备跨 provider 语义时才进入 core 通用字段。
 
+### Provider-native replay 与通用抽象边界
+
+OpenAI assistant message `phase` 暴露了一个重要边界：部分 provider 原生 item 字段会影响同 provider follow-up/replay 行为，但不应该为每个字段都扩展 provider-specific mapper 分支。后续实现应优先保存 provider-native snapshot，用 replay policy 决定是否使用原始 payload。具备跨 provider 潜力的字段，例如 assistant output phase，可以再提升为通用抽象。
+
+跨 provider replay 暂不支持。长期 TODO 是提供 replay compatibility report，而不是直接把 provider-native payload 转换给另一个 provider。
+
 ### 自动上传本地文件
 
 火山方舟 SDK 支持部分本地路径便捷上传，但 `vatbrain` 不应默认隐式上传。若实现便捷 API，必须是显式方法或显式 `auto_upload=True`。
@@ -543,4 +572,5 @@ docs/user/python/volcengine-quickstart.CN.md
 2. 再做 v0.3 的 core 模型扩展，保持 OpenAI adapter 兼容。
 3. 为 v0.4 新增 `volcengine-adapter.CN.md`，明确 SDK surface 后再编码。
 4. Volcengine MVP 优先覆盖 Responses generation、Files API 和 multimodal embedding。
-5. hosted tools、image generation、video generation 放入 v0.5。
+5. 根据 Volcengine adapter 实现经验评估 provider-native replay 在第二 provider 上的最小支持面。
+6. hosted tools、image generation、video generation 放入 v0.5。

@@ -5,12 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from whero.vatbrain import (
+    AssistantMessagePhase,
     FunctionResultItem,
     GenerationConfig,
     GenerationRequest,
     MessageItem,
     ReasoningConfig,
     RemoteContextHint,
+    ReplayMode,
+    ReplayPolicy,
     ResponseFormat,
     StreamOptions,
     TextPart,
@@ -93,12 +96,24 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
     assert params["metadata"] == {"trace_id": "t-1"}
 
 
+def test_assistant_phase_maps_to_openai_message_phase() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.assistant("working", assistant_phase=AssistantMessagePhase.COMMENTARY)],
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["input"][0]["phase"] == "commentary"
+
+
 def test_generation_request_maps_remote_context_hint() -> None:
     request = GenerationRequest(
         model="gpt-test",
-        items=[MessageItem.user("hello")],
+        items=[MessageItem.system("covered"), MessageItem.user("hello")],
         remote_context=RemoteContextHint(
             previous_response_id="resp_1",
+            covered_item_count=1,
             store=True,
             cache_policy="24h",
             provider_options={"prompt_cache_key": "cache-key"},
@@ -108,9 +123,53 @@ def test_generation_request_maps_remote_context_hint() -> None:
     params = to_openai_generation_params(request)
 
     assert params["previous_response_id"] == "resp_1"
+    assert len(params["input"]) == 1
+    assert params["input"][0]["content"] == [{"type": "input_text", "text": "hello"}]
     assert params["store"] is True
     assert params["prompt_cache_retention"] == "24h"
     assert params["prompt_cache_key"] == "cache-key"
+
+
+def test_openai_generation_mapper_requires_remote_context_coverage() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        remote_context=RemoteContextHint(previous_response_id="resp_1"),
+    )
+
+    with pytest.raises(InvalidItemError, match="covered_item_count"):
+        to_openai_generation_params(request)
+
+
+def test_openai_generation_mapper_rejects_empty_remote_context_suffix() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("covered")],
+        remote_context=RemoteContextHint(previous_response_id="resp_1", covered_item_count=1),
+    )
+
+    with pytest.raises(InvalidItemError, match="at least one new item"):
+        to_openai_generation_params(request)
+
+
+def test_openai_generation_mapper_can_build_full_input_without_remote_context() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.system("covered"), MessageItem.user("hello")],
+        remote_context=RemoteContextHint(
+            previous_response_id="resp_1",
+            covered_item_count=1,
+            store=True,
+        ),
+    )
+
+    params = to_openai_generation_params(request, use_remote_context=False)
+
+    assert "previous_response_id" not in params
+    assert params["store"] is True
+    assert len(params["input"]) == 2
+    assert params["input"][0]["role"] == "system"
+    assert params["input"][1]["role"] == "user"
 
 
 def test_openai_generation_mapper_rejects_unsupported_new_parts() -> None:
@@ -162,18 +221,6 @@ def test_provider_options_override_default_params() -> None:
     assert params["temperature"] == 0.7
 
 
-def test_json_object_response_format_maps_to_text_format() -> None:
-    request = GenerationRequest(
-        model="gpt-test",
-        items=[MessageItem.user("json please")],
-        response_format=ResponseFormat(type="json_object"),
-    )
-
-    params = to_openai_generation_params(request)
-
-    assert params["text"] == {"format": {"type": "json_object"}}
-
-
 def test_json_schema_response_format_maps_to_openai_text_format() -> None:
     schema = {
         "type": "object",
@@ -185,7 +232,6 @@ def test_json_schema_response_format_maps_to_openai_text_format() -> None:
         model="gpt-test",
         items=[MessageItem.user("extract")],
         response_format=ResponseFormat(
-            type="json_schema",
             json_schema=schema,
             json_schema_name="person",
             json_schema_description="A person record.",
@@ -206,22 +252,21 @@ def test_json_schema_response_format_maps_to_openai_text_format() -> None:
     }
 
 
-def test_legacy_openai_json_schema_wrapper_is_preserved() -> None:
+def test_response_format_does_not_expose_json_mode_selector() -> None:
+    with pytest.raises(TypeError):
+        ResponseFormat(type="json_object", json_schema={"type": "object"})  # type: ignore[call-arg]
+
+
+def test_response_format_rejects_provider_json_schema_wrapper() -> None:
     wrapper = {
         "type": "json_schema",
         "name": "wrapped",
         "schema": {"type": "object", "properties": {}},
         "strict": False,
     }
-    request = GenerationRequest(
-        model="gpt-test",
-        items=[MessageItem.user("extract")],
-        response_format=ResponseFormat(type="json_schema", json_schema=wrapper),
-    )
 
-    params = to_openai_generation_params(request)
-
-    assert params["text"] == {"format": wrapper}
+    with pytest.raises(ValueError):
+        ResponseFormat(json_schema=wrapper)
 
 
 def test_openai_response_maps_message_function_call_and_usage() -> None:
@@ -234,6 +279,7 @@ def test_openai_response_maps_message_function_call_and_usage() -> None:
                 type="message",
                 id="msg_1",
                 role="assistant",
+                phase="final_answer",
                 content=[
                     SimpleNamespace(type="output_text", text="hello there"),
                 ],
@@ -263,15 +309,97 @@ def test_openai_response_maps_message_function_call_and_usage() -> None:
     assert mapped.stop_reason == "completed"
     assert isinstance(mapped.output_items[0], MessageItem)
     assert mapped.output_items[0].role.value == "assistant"
+    assert mapped.output_items[0].assistant_phase == AssistantMessagePhase.FINAL_ANSWER
     assert mapped.output_items[0].parts == (TextPart("hello there"),)
+    assert mapped.output_items[0].provider_snapshots[0].payload["phase"] == "final_answer"
     assert isinstance(mapped.output_items[1], FunctionCallItem)
     assert mapped.output_items[1].name == "lookup"
     assert mapped.output_items[1].call_id == "call_1"
+    assert mapped.output_items[1].provider_snapshots[0].payload["type"] == "function_call"
     assert mapped.usage is not None
     assert mapped.usage.input_tokens == 10
     assert mapped.usage.output_tokens == 5
     assert mapped.usage.cached_tokens == 3
     assert mapped.usage.reasoning_tokens == 2
+
+
+def test_openai_generation_mapper_replays_provider_snapshot_payload() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                id="msg_1",
+                role="assistant",
+                phase="commentary",
+                content=[SimpleNamespace(type="output_text", text="working")],
+                status="completed",
+            )
+        ],
+        usage=None,
+    )
+    replay_item = from_openai_generation_response(response).output_items[0]
+
+    params = to_openai_generation_params(
+        GenerationRequest(model="gpt-test", items=[replay_item])
+    )
+
+    assert params["input"][0] == {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": "working"}],
+        "status": "completed",
+    }
+
+
+def test_openai_generation_mapper_can_skip_provider_snapshot_replay() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                id="msg_1",
+                role="assistant",
+                phase="commentary",
+                content=[SimpleNamespace(type="output_text", text="working")],
+                status="completed",
+            )
+        ],
+        usage=None,
+    )
+    replay_item = from_openai_generation_response(response).output_items[0]
+
+    params = to_openai_generation_params(
+        GenerationRequest(
+            model="gpt-test",
+            items=[replay_item],
+            replay_policy=ReplayPolicy(mode=ReplayMode.NORMALIZED_ONLY),
+        )
+    )
+
+    assert params["input"][0] == {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "working"}],
+        "phase": "commentary",
+    }
+
+
+def test_openai_generation_mapper_requires_provider_snapshot_when_configured() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[MessageItem.user("hello")],
+        replay_policy=ReplayPolicy(mode=ReplayMode.REQUIRE_PROVIDER_NATIVE),
+    )
+
+    with pytest.raises(InvalidItemError):
+        to_openai_generation_params(request)
 
 
 def test_openai_response_records_unsupported_output_items_when_other_items_map() -> None:

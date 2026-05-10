@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from whero.vatbrain import ClientConfig, MessageItem, ReasoningConfig, RemoteContextHint, ToolCallConfig
+import pytest
+
+from whero.vatbrain import (
+    ClientConfig,
+    MessageItem,
+    ReasoningConfig,
+    RemoteContextHint,
+    RemoteContextInvalidBehavior,
+    ReplayPolicy,
+    ToolCallConfig,
+)
 from whero.vatbrain.core.errors import ProviderRequestError
 from whero.vatbrain.core.generation import StreamEventType
 from whero.vatbrain.providers.openai import OpenAIClient
@@ -24,6 +34,32 @@ class RaisingResponses:
 
     def create(self, **kwargs: object) -> object:
         raise self.exc
+
+
+class FallbackResponses:
+    def __init__(self, *, first_exc: Exception, result: object) -> None:
+        self.first_exc = first_exc
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise self.first_exc
+        return self.result
+
+
+class AsyncFallbackResponses:
+    def __init__(self, *, first_exc: Exception, result: object) -> None:
+        self.first_exc = first_exc
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    async def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise self.first_exc
+        return self.result
 
 
 class FakeEmbeddings:
@@ -48,6 +84,17 @@ class FakeOpenAIRaising:
         self.embeddings = FakeEmbeddings(SimpleNamespace(data=[], usage=None))
 
 
+class FakeOpenAIFallback:
+    def __init__(self, *, first_exc: Exception, response: object) -> None:
+        self.responses = FallbackResponses(first_exc=first_exc, result=response)
+        self.embeddings = FakeEmbeddings(SimpleNamespace(data=[], usage=None))
+
+
+class FakeAsyncOpenAIFallback:
+    def __init__(self, *, first_exc: Exception, response: object) -> None:
+        self.responses = AsyncFallbackResponses(first_exc=first_exc, result=response)
+
+
 class FakeOpenAIError(Exception):
     status_code = 400
     request_id = "req_1"
@@ -56,6 +103,19 @@ class FakeOpenAIError(Exception):
             "type": "invalid_request_error",
             "code": "bad_param",
             "param": "stream_options",
+        }
+    }
+
+
+class FakePreviousResponseExpiredError(Exception):
+    status_code = 400
+    request_id = "req_expired"
+    body = {
+        "error": {
+            "type": "invalid_request_error",
+            "code": "previous_response_expired",
+            "param": "previous_response_id",
+            "message": "The previous response has expired.",
         }
     }
 
@@ -73,10 +133,10 @@ def test_client_generate_uses_explicit_model_and_common_options() -> None:
 
     response = client.generate(
         model="gpt-test",
-        items=[MessageItem.user("hello")],
+        items=[MessageItem.system("covered"), MessageItem.user("hello")],
         reasoning=ReasoningConfig(effort="low"),
         tool_call_config=ToolCallConfig(parallel_tool_calls=True),
-        remote_context=RemoteContextHint(previous_response_id="resp_old"),
+        remote_context=RemoteContextHint(previous_response_id="resp_old", covered_item_count=1),
     )
 
     assert response.id == "resp_1"
@@ -84,6 +144,93 @@ def test_client_generate_uses_explicit_model_and_common_options() -> None:
     assert fake.responses.calls[0]["reasoning"] == {"effort": "low"}
     assert fake.responses.calls[0]["parallel_tool_calls"] is True
     assert fake.responses.calls[0]["previous_response_id"] == "resp_old"
+    assert len(fake.responses.calls[0]["input"]) == 1
+    assert fake.responses.calls[0]["input"][0]["role"] == "user"
+
+
+def test_client_generate_replays_without_remote_context_when_enabled() -> None:
+    raw_response = SimpleNamespace(
+        id="resp_2",
+        model="gpt-test",
+        status="completed",
+        output=[],
+        usage=None,
+    )
+    fake = FakeOpenAIFallback(first_exc=FakePreviousResponseExpiredError("expired"), response=raw_response)
+    client = OpenAIClient(client=fake, async_client=object())
+
+    response = client.generate(
+        model="gpt-test",
+        items=[MessageItem.system("covered"), MessageItem.user("hello")],
+        remote_context=RemoteContextHint(
+            previous_response_id="resp_old",
+            covered_item_count=1,
+            store=True,
+        ),
+        replay_policy=ReplayPolicy(
+            on_remote_context_invalid=RemoteContextInvalidBehavior.REPLAY_WITHOUT_REMOTE_CONTEXT,
+        ),
+    )
+
+    assert response.id == "resp_2"
+    assert len(fake.responses.calls) == 2
+    assert fake.responses.calls[0]["previous_response_id"] == "resp_old"
+    assert len(fake.responses.calls[0]["input"]) == 1
+    assert fake.responses.calls[0]["input"][0]["role"] == "user"
+    assert "previous_response_id" not in fake.responses.calls[1]
+    assert fake.responses.calls[1]["store"] is True
+    assert len(fake.responses.calls[1]["input"]) == 2
+    assert fake.responses.calls[1]["input"][0]["role"] == "system"
+    assert fake.responses.calls[1]["input"][1]["role"] == "user"
+
+
+def test_client_generate_does_not_replay_remote_context_by_default() -> None:
+    exc = FakePreviousResponseExpiredError("expired")
+    client = OpenAIClient(client=FakeOpenAIRaising(exc), async_client=object())
+
+    try:
+        client.generate(
+            model="gpt-test",
+            items=[MessageItem.system("covered"), MessageItem.user("hello")],
+            remote_context=RemoteContextHint(previous_response_id="resp_old", covered_item_count=1),
+        )
+    except ProviderRequestError as wrapped:
+        assert wrapped.cause is exc
+        assert wrapped.details.error_param == "previous_response_id"
+    else:
+        raise AssertionError("Expected ProviderRequestError")
+
+
+@pytest.mark.anyio
+async def test_async_client_generate_replays_without_remote_context_when_enabled() -> None:
+    raw_response = SimpleNamespace(
+        id="resp_async",
+        model="gpt-test",
+        status="completed",
+        output=[],
+        usage=None,
+    )
+    fake_async = FakeAsyncOpenAIFallback(
+        first_exc=FakePreviousResponseExpiredError("expired"),
+        response=raw_response,
+    )
+    client = OpenAIClient(client=object(), async_client=fake_async)
+
+    response = await client.agenerate(
+        model="gpt-test",
+        items=[MessageItem.system("covered"), MessageItem.user("hello")],
+        remote_context=RemoteContextHint(previous_response_id="resp_old", covered_item_count=1),
+        replay_policy=ReplayPolicy(
+            on_remote_context_invalid=RemoteContextInvalidBehavior.REPLAY_WITHOUT_REMOTE_CONTEXT,
+        ),
+    )
+
+    assert response.id == "resp_async"
+    assert len(fake_async.responses.calls) == 2
+    assert fake_async.responses.calls[0]["previous_response_id"] == "resp_old"
+    assert len(fake_async.responses.calls[0]["input"]) == 1
+    assert "previous_response_id" not in fake_async.responses.calls[1]
+    assert len(fake_async.responses.calls[1]["input"]) == 2
 
 
 def test_client_stream_generate_maps_events() -> None:
@@ -103,6 +250,37 @@ def test_client_stream_generate_maps_events() -> None:
     assert fake.responses.calls[0]["stream"] is True
     assert events[0].delta == "hi"
     assert events[0].type == StreamEventType.TEXT_DELTA.value
+
+
+def test_client_stream_generate_replays_without_remote_context_when_enabled() -> None:
+    stream = [
+        SimpleNamespace(
+            type="response.output_text.delta",
+            response_id="resp_2",
+            item_id="msg_1",
+            delta="hi",
+        )
+    ]
+    fake = FakeOpenAIFallback(first_exc=FakePreviousResponseExpiredError("expired"), response=stream)
+    client = OpenAIClient(client=fake, async_client=object())
+
+    events = list(
+        client.stream_generate(
+            model="gpt-test",
+            items=[MessageItem.system("covered"), MessageItem.user("hello")],
+            remote_context=RemoteContextHint(previous_response_id="resp_old", covered_item_count=1),
+            replay_policy=ReplayPolicy(
+                on_remote_context_invalid=RemoteContextInvalidBehavior.REPLAY_WITHOUT_REMOTE_CONTEXT,
+            ),
+        )
+    )
+
+    assert len(fake.responses.calls) == 2
+    assert fake.responses.calls[0]["previous_response_id"] == "resp_old"
+    assert len(fake.responses.calls[0]["input"]) == 1
+    assert "previous_response_id" not in fake.responses.calls[1]
+    assert len(fake.responses.calls[1]["input"]) == 2
+    assert events[0].delta == "hi"
 
 
 def test_client_embed_uses_embedding_endpoint() -> None:

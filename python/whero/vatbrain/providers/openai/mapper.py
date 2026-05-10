@@ -19,30 +19,42 @@ from whero.vatbrain.core.generation import (
     GenerationResponse,
     ReasoningConfig,
     RemoteContextHint,
+    ReplayMode,
+    ReplayPolicy,
     ResponseFormat,
     ToolCallConfig,
 )
 from whero.vatbrain.core.items import (
+    AssistantMessagePhase,
     FunctionCallItem,
     FunctionResultItem,
     ImagePart,
     Item,
     MessageItem,
+    ProviderItemSnapshot,
     Role,
     TextPart,
+    provider_snapshot_for,
 )
 from whero.vatbrain.core.tools import FunctionToolSpec, ToolChoice, ToolSpec
 from whero.vatbrain.core.usage import Usage
 
 PROVIDER = "openai"
+API_FAMILY = "responses"
 
 
-def to_openai_generation_params(request: GenerationRequest, *, stream: bool = False) -> dict[str, Any]:
+def to_openai_generation_params(
+    request: GenerationRequest,
+    *,
+    stream: bool = False,
+    use_remote_context: bool = True,
+) -> dict[str, Any]:
     """Convert a vatbrain generation request into OpenAI Responses API parameters."""
 
+    input_items = _openai_input_items(request, use_remote_context=use_remote_context)
     params: dict[str, Any] = {
         "model": request.model,
-        "input": [_item_to_openai_input(item) for item in request.items],
+        "input": [_item_to_openai_input(item, request.replay_policy) for item in input_items],
     }
     if stream:
         params["stream"] = True
@@ -57,10 +69,17 @@ def to_openai_generation_params(request: GenerationRequest, *, stream: bool = Fa
         if reasoning:
             params["reasoning"] = reasoning
     if request.remote_context:
-        params.update(_remote_context_to_openai(request.remote_context))
+        params.update(
+            _remote_context_to_openai(
+                request.remote_context,
+                include_previous_response_id=use_remote_context,
+            )
+        )
     if request.tool_call_config:
         params.update(_tool_call_config_to_params(request.tool_call_config))
     params.update(request.provider_options)
+    if not use_remote_context:
+        params.pop("previous_response_id", None)
     return params
 
 
@@ -161,7 +180,35 @@ def usage_from_openai(usage: Any | None) -> Usage | None:
     )
 
 
-def _item_to_openai_input(item: Item) -> dict[str, Any]:
+def _openai_input_items(request: GenerationRequest, *, use_remote_context: bool) -> tuple[Item, ...]:
+    if not use_remote_context or request.remote_context is None:
+        return request.items
+    remote_context = request.remote_context
+    if remote_context.previous_response_id is None:
+        return request.items
+    if remote_context.covered_item_count is None:
+        raise InvalidItemError(
+            "OpenAI previous_response_id replay requires "
+            "RemoteContextHint.covered_item_count."
+        )
+    if remote_context.covered_item_count > len(request.items):
+        raise InvalidItemError(
+            "RemoteContextHint.covered_item_count exceeds GenerationRequest.items length."
+        )
+    suffix = request.items[remote_context.covered_item_count :]
+    if not suffix:
+        raise InvalidItemError("OpenAI previous_response_id replay requires at least one new item.")
+    return suffix
+
+
+def _item_to_openai_input(item: Item, replay_policy: ReplayPolicy | None = None) -> dict[str, Any]:
+    mode = replay_policy.mode if replay_policy is not None else ReplayMode.PREFER_PROVIDER_NATIVE
+    if mode != ReplayMode.NORMALIZED_ONLY:
+        snapshot = provider_snapshot_for(item, provider=PROVIDER, api_family=API_FAMILY)
+        if snapshot is not None:
+            return dict(snapshot.payload)
+        if mode == ReplayMode.REQUIRE_PROVIDER_NATIVE:
+            raise InvalidItemError("Provider-native replay requires an OpenAI Responses item snapshot.")
     if isinstance(item, MessageItem):
         return _message_to_openai_input(item)
     if isinstance(item, FunctionResultItem):
@@ -189,7 +236,14 @@ def _message_to_openai_input(item: MessageItem) -> dict[str, Any]:
             content.append(_image_part_to_openai(part))
         else:
             raise InvalidItemError(f"Unsupported message part: {part!r}")
-    return {"type": "message", "role": item.role.value, "content": content}
+    payload: dict[str, Any] = {"type": "message", "role": item.role.value, "content": content}
+    if item.assistant_phase is not None:
+        payload["phase"] = (
+            item.assistant_phase.value
+            if isinstance(item.assistant_phase, AssistantMessagePhase)
+            else item.assistant_phase
+        )
+    return payload
 
 
 def _text_type_for_role(role: Role) -> str:
@@ -239,42 +293,18 @@ def _generation_config_to_params(config: GenerationConfig) -> dict[str, Any]:
 
 
 def _response_format_to_openai_text(response_format: ResponseFormat) -> dict[str, Any]:
-    if response_format.type != "json_schema":
-        return {"format": {"type": response_format.type}}
-
-    if response_format.json_schema is None:
-        return {"format": {"type": "json_schema"}}
-
-    schema_payload = _json_schema_payload(response_format)
-    return {"format": schema_payload}
-
-
-def _json_schema_payload(response_format: ResponseFormat) -> dict[str, Any]:
-    schema = response_format.json_schema or {}
-    if _looks_like_openai_json_schema_wrapper(schema):
-        payload = dict(schema)
-        payload.setdefault("type", "json_schema")
-    else:
-        payload = {
-            "type": "json_schema",
-            "name": response_format.json_schema_name or "response",
-            "schema": schema,
-        }
+    payload = {
+        "type": "json_schema",
+        "name": response_format.json_schema_name or "response",
+        "schema": response_format.json_schema,
+    }
     if response_format.json_schema_name is not None:
         payload["name"] = response_format.json_schema_name
     if response_format.json_schema_description is not None:
         payload["description"] = response_format.json_schema_description
     if response_format.json_schema_strict is not None:
         payload["strict"] = response_format.json_schema_strict
-    return payload
-
-
-def _looks_like_openai_json_schema_wrapper(schema: dict[str, Any]) -> bool:
-    return (
-        schema.get("type") == "json_schema"
-        and isinstance(schema.get("name"), str)
-        and isinstance(schema.get("schema"), dict)
-    )
+    return {"format": payload}
 
 
 def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
@@ -292,9 +322,13 @@ def _reasoning_to_openai(reasoning: ReasoningConfig) -> dict[str, Any]:
     return params
 
 
-def _remote_context_to_openai(remote_context: RemoteContextHint) -> dict[str, Any]:
+def _remote_context_to_openai(
+    remote_context: RemoteContextHint,
+    *,
+    include_previous_response_id: bool = True,
+) -> dict[str, Any]:
     params = dict(remote_context.provider_options)
-    if remote_context.previous_response_id is not None:
+    if include_previous_response_id and remote_context.previous_response_id is not None:
         params["previous_response_id"] = remote_context.previous_response_id
     if remote_context.store is not None:
         params["store"] = remote_context.store
@@ -328,6 +362,7 @@ def _openai_output_item_to_item(item: Any) -> Item:
                 arguments=_get_attr(item, "arguments", ""),
                 call_id=_get_attr(item, "call_id", ""),
                 status=_get_attr(item, "status", None),
+                provider_snapshots=(_provider_snapshot(item, replayable=True),),
             )
     except Exception as exc:
         raise ProviderResponseMappingError(
@@ -356,7 +391,9 @@ def _openai_message_to_item(item: Any) -> MessageItem:
     return MessageItem(
         Role(_get_attr(item, "role", Role.ASSISTANT.value)),
         parts,
+        assistant_phase=_get_attr(item, "phase", None),
         id=_get_attr(item, "id", None),
+        provider_snapshots=(_provider_snapshot(item, replayable=True),),
     )
 
 
@@ -389,6 +426,42 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(name, default)
     return getattr(obj, name, default)
+
+
+def _provider_snapshot(item: Any, *, replayable: bool) -> ProviderItemSnapshot:
+    payload = _to_plain_data(item)
+    item_type = str(_get_attr(item, "type", payload.get("type", "")))
+    return ProviderItemSnapshot(
+        provider=PROVIDER,
+        api_family=API_FAMILY,
+        item_type=item_type,
+        payload=payload,
+        replayable=replayable,
+        captured_from="response",
+    )
+
+
+def _to_plain_data(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _to_plain_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_plain_data(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_plain_data(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(exclude_none=True)
+        return _to_plain_data(dumped)
+    if hasattr(value, "to_dict"):
+        return _to_plain_data(value.to_dict())
+    if hasattr(value, "__dict__"):
+        return {
+            str(key): _to_plain_data(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+    return value
 
 
 def _unsupported_output_item_summary(item: Any) -> dict[str, Any]:

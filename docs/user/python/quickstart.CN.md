@@ -114,6 +114,63 @@ response = client.generate(
 
 OpenAI adapter 会映射 `previous_response_id` 与 `store`；provider conversation 这类持久化上下文能力暂不进入 core。
 
+用户侧仍应传入完整 `items`。如果 `previous_response_id` 对应的 provider response 已覆盖完整上下文中的历史前缀，可以用 `covered_item_count` 显式说明覆盖范围；adapter 才能在 provider 请求层只发送追加 items：
+
+```python
+from whero.vatbrain import MessageItem, RemoteContextHint
+
+items = [
+    MessageItem.system("Answer with concise reasoning."),
+    MessageItem.user("Summarize the contract."),
+    MessageItem.assistant("The contract defines payment terms."),
+    MessageItem.user("Now extract the termination clause."),
+]
+
+response = client.generate(
+    model="gpt-5.1",
+    items=items,
+    remote_context=RemoteContextHint(
+        previous_response_id="resp_previous",
+        covered_item_count=3,
+    ),
+)
+```
+
+上例中，`items[:3]` 仍是本次调用的语义上下文；OpenAI provider 请求只需要传输 `items[3:]`。如果传入 `previous_response_id` 但没有 `covered_item_count`，OpenAI adapter 不应猜测哪些 item 是历史、哪些 item 是新增输入，应提示用户补充覆盖范围或移除 `previous_response_id`。
+
+Provider response 映射出的 `Item` 会在 `provider_snapshots` 字段保留同 provider/API family 的原始 item payload。再次调用同一 provider 时，OpenAI adapter 默认会优先使用该 snapshot 重放历史 item，从而保留 OpenAI assistant message 的 `phase` 等原生字段：
+
+```python
+from whero.vatbrain import AssistantMessagePhase, MessageItem, ReplayPolicy
+
+history = [
+    MessageItem.assistant(
+        "Let me inspect that.",
+        assistant_phase=AssistantMessagePhase.COMMENTARY,
+    ),
+    MessageItem.user("Continue."),
+]
+
+response = client.generate(model="gpt-5.1", items=history)
+```
+
+`assistant_phase` 是通用抽象，只对 assistant message 有意义。OpenAI adapter 会将其映射为原生 `phase`。如果需要禁用 snapshot replay 或强制所有重放 item 都带 provider 原始快照，可以使用 `ReplayPolicy(mode="normalized_only")` 或 `ReplayPolicy(mode="require_provider_native")`。
+
+当 `previous_response_id` 失效时，OpenAI adapter 默认抛出 provider request error。只有显式设置 `ReplayPolicy(on_remote_context_invalid="replay_without_remote_context")` 时，client 才会移除失效的 `previous_response_id`，用完整 `items` 自动重试一次：
+
+```python
+response = client.generate(
+    model="gpt-5.1",
+    items=history,
+    remote_context=RemoteContextHint(previous_response_id="resp_previous"),
+    replay_policy=ReplayPolicy(on_remote_context_invalid="replay_without_remote_context"),
+)
+```
+
+如果第一次请求使用 OpenAI previous response 差分传输，失效 fallback 仍会回到完整 `items`。因此不要只把“新增输入”传给 `items`；`items` 永远应是完整语义上下文。
+
+跨 provider replay 暂不支持；provider snapshot 只用于原 provider 的高保真重放。
+
 ## 流式生成
 
 流式调用返回标准化事件。v0.2 起，文本增量事件使用更明确的 `text.delta` 类型；为了兼容旧代码，OpenAI 文本增量事件仍会在 metadata 中标记旧语义。
@@ -161,21 +218,7 @@ async for event in client.astream_generate(
 
 ## Structured Output
 
-OpenAI adapter 使用 Responses API 的 `text.format` 表达 JSON mode 与 JSON schema structured output。
-
-JSON object：
-
-```python
-from whero.vatbrain import MessageItem, ResponseFormat
-
-response = client.generate(
-    model="gpt-5.1",
-    items=[MessageItem.user("Return a JSON object with a short title.")],
-    response_format=ResponseFormat(type="json_object"),
-)
-```
-
-JSON schema：
+OpenAI adapter 使用 Responses API 的 `text.format` 表达 JSON Schema structured output。`vatbrain` 不兼容已淘汰的 JSON mode / `json_object` 调用方式。
 
 ```python
 from whero.vatbrain import MessageItem, ResponseFormat
@@ -184,7 +227,6 @@ response = client.generate(
     model="gpt-5.1",
     items=[MessageItem.user("Extract a contact.")],
     response_format=ResponseFormat(
-        type="json_schema",
         json_schema={
             "type": "object",
             "properties": {

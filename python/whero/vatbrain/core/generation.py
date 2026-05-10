@@ -24,13 +24,19 @@ class GenerationConfig:
 
 @dataclass(frozen=True, slots=True)
 class ResponseFormat:
-    """Common response format request."""
+    """JSON Schema structured output request."""
 
-    type: str
-    json_schema: dict[str, Any] | None = None
+    json_schema: dict[str, Any]
     json_schema_name: str | None = None
     json_schema_description: str | None = None
     json_schema_strict: bool | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.json_schema, dict):
+            raise ValueError("ResponseFormat.json_schema must be a JSON schema dictionary.")
+        if self.json_schema.get("type") == "json_schema" and "schema" in self.json_schema:
+            raise ValueError("ResponseFormat.json_schema must be the schema body, not a provider wrapper.")
+        object.__setattr__(self, "json_schema", dict(self.json_schema))
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +56,55 @@ class RemoteContextHint:
     """Provider-side context/cache hints that do not replace full context."""
 
     previous_response_id: str | None = None
+    covered_item_count: int | None = None
     cache_policy: str | None = None
     store: bool | None = None
     expires_at: datetime | str | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.covered_item_count is not None:
+            if self.previous_response_id is None:
+                raise ValueError(
+                    "RemoteContextHint.covered_item_count requires previous_response_id."
+                )
+            if self.covered_item_count < 0:
+                raise ValueError("RemoteContextHint.covered_item_count must be non-negative.")
+        object.__setattr__(self, "provider_options", dict(self.provider_options))
+
+
+class ReplayMode(StrEnum):
+    """How provider-native item snapshots are used for replay."""
+
+    NORMALIZED_ONLY = "normalized_only"
+    PREFER_PROVIDER_NATIVE = "prefer_provider_native"
+    REQUIRE_PROVIDER_NATIVE = "require_provider_native"
+
+
+class RemoteContextInvalidBehavior(StrEnum):
+    """Requested behavior when a provider-side context hint is invalid."""
+
+    RAISE = "raise"
+    REPLAY_WITHOUT_REMOTE_CONTEXT = "replay_without_remote_context"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayPolicy:
+    """Controls same-provider replay from normalized items and native snapshots."""
+
+    mode: ReplayMode | str = ReplayMode.PREFER_PROVIDER_NATIVE
+    on_remote_context_invalid: RemoteContextInvalidBehavior | str = RemoteContextInvalidBehavior.RAISE
+    cross_provider: str = "unsupported"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", ReplayMode(self.mode))
+        object.__setattr__(
+            self,
+            "on_remote_context_invalid",
+            RemoteContextInvalidBehavior(self.on_remote_context_invalid),
+        )
+        if self.cross_provider != "unsupported":
+            raise ValueError("ReplayPolicy.cross_provider currently supports 'unsupported' only.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +135,7 @@ class GenerationRequest:
     tool_call_config: ToolCallConfig | None = None
     stream_options: StreamOptions | None = None
     remote_context: RemoteContextHint | None = None
+    replay_policy: ReplayPolicy | None = None
     provider_options: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
@@ -98,6 +150,7 @@ class GenerationRequest:
         tool_call_config: ToolCallConfig | None = None,
         stream_options: StreamOptions | None = None,
         remote_context: RemoteContextHint | None = None,
+        replay_policy: ReplayPolicy | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> None:
         if not model:
@@ -105,6 +158,15 @@ class GenerationRequest:
         normalized_items = tuple(items)
         if not normalized_items:
             raise ValueError("GenerationRequest.items must not be empty.")
+        if (
+            remote_context is not None
+            and remote_context.covered_item_count is not None
+            and remote_context.covered_item_count > len(normalized_items)
+        ):
+            raise ValueError(
+                "RemoteContextHint.covered_item_count must be less than or equal to "
+                "GenerationRequest.items length."
+            )
         object.__setattr__(self, "model", model)
         object.__setattr__(self, "items", normalized_items)
         object.__setattr__(self, "tools", tuple(tools))
@@ -114,6 +176,7 @@ class GenerationRequest:
         object.__setattr__(self, "tool_call_config", tool_call_config)
         object.__setattr__(self, "stream_options", stream_options)
         object.__setattr__(self, "remote_context", remote_context)
+        object.__setattr__(self, "replay_policy", replay_policy)
         object.__setattr__(self, "provider_options", dict(provider_options or {}))
 
 

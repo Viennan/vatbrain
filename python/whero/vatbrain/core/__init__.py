@@ -28,11 +28,15 @@ from whero.vatbrain.core.generation import (
     GenerationStreamEvent,
     ReasoningConfig,
     RemoteContextHint,
+    RemoteContextInvalidBehavior,
+    ReplayMode,
+    ReplayPolicy,
     ResponseFormat,
     StreamOptions,
     ToolCallConfig,
 )
 from whero.vatbrain.core.items import (
+    AssistantMessagePhase,
     AudioPart,
     FilePart,
     FunctionCallItem,
@@ -42,10 +46,13 @@ from whero.vatbrain.core.items import (
     ItemPurpose,
     MessageItem,
     PartKind,
+    ProviderItemSnapshot,
     ReasoningItem,
     Role,
     TextPart,
     VideoPart,
+    provider_snapshot_for,
+    provider_snapshot_key,
 )
 from whero.vatbrain.core.media import (
     ImageGenerationRequest,
@@ -73,6 +80,7 @@ from whero.vatbrain.core.usage import Usage
 
 __all__ = [
     "AdapterCapability",
+    "AssistantMessagePhase",
     "AudioPart",
     "CapabilityReliability",
     "CapabilitySource",
@@ -111,9 +119,13 @@ __all__ = [
     "MessageItem",
     "ModelCapability",
     "PartKind",
+    "ProviderItemSnapshot",
     "ReasoningConfig",
     "ReasoningItem",
     "RemoteContextHint",
+    "RemoteContextInvalidBehavior",
+    "ReplayMode",
+    "ReplayPolicy",
     "ResourceCapability",
     "ResponseFormat",
     "Role",
@@ -128,4 +140,6 @@ __all__ = [
     "ToolSpec",
     "Usage",
     "VideoPart",
+    "provider_snapshot_for",
+    "provider_snapshot_key",
 ]

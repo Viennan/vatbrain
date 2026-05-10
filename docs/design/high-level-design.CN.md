@@ -2,7 +2,7 @@
 
 状态：设计草案  
 日期：2026-05-04  
-最近更新：2026-05-05
+最近更新：2026-05-10
 
 ## 背景
 
@@ -58,6 +58,10 @@
 provider 侧的 stored response、previous response、conversation、context cache 或其他上下文状态能力应被视为优化提示，而不是 `vatbrain` 的核心语义状态。
 
 `vatbrain` 可以允许用户显式传入远端上下文 hint，例如 previous response id、cache policy 或 store policy。adapter 可以利用这些 hint 降低成本或延迟，但调用语义仍应由用户传入的完整 `Item` 序列定义。provider conversation 这类持久化上下文暂不进入通用 core 抽象。
+
+Full-context First 不等于每次 provider 请求都必须传输完整 input。若用户明确说明某个 `previous_response_id` 已覆盖完整 `items` 的前缀，adapter 可以只把未覆盖的追加 suffix 发送给 provider。该覆盖边界必须显式表达，例如通过 `RemoteContextHint.covered_item_count`；adapter 不能只凭 `previous_response_id` 猜测哪些 item 是 history、哪些 item 是新增输入。
+
+当远端上下文 hint 失效时，adapter 不应默认静默 fallback。若用户显式启用重放策略，adapter 可以基于完整 `Item` 序列重新发起请求。为避免丢失 provider 原生 item 字段，`vatbrain` 应支持 provider-native snapshot 与强制 replay 策略；详见 [design/provider-native-replay.CN.md](design/provider-native-replay.CN.md)。
 
 ### API-family Separation
 
@@ -201,6 +205,8 @@ normalized usage 可覆盖输入 token、输出 token、cache token、reasoning 
 
 单一 role 无法充分表达 item 语义。例如，一张图片可以来自 user，目的可以是 query context；一个文件可以来自 tool，目的可以是 retrieval result；一段 reasoning 可以来自 assistant，但并不等同于最终回答。
 
+对于由 provider 返回、后续可能重放的 item，`Item` 还需要能够关联 provider-native snapshot。snapshot 只用于同 provider/API family 下的高保真重放，不应作为跨 provider 的通用语义来源。
+
 ### Generation Request/Response
 
 generation 请求的核心语义是：
@@ -216,10 +222,11 @@ GenerationRequest
 - tool_call_config
 - stream_options
 - remote_context
+- replay_policy
 - provider_options
 ```
 
-其中 `items` 是完整上下文序列。`reasoning` 与 `tool_call_config` 表达跨厂商的通用 generation 语义。`remote_context` 表达 provider 侧状态、缓存和 previous response 等优化 hint。`provider_options` 只用于承载少量不可移植但必要的厂商专有参数。
+其中 `items` 是完整上下文序列。`reasoning` 与 `tool_call_config` 表达跨厂商的通用 generation 语义。`remote_context` 表达 provider 侧状态、缓存、previous response 及其对完整 `items` 前缀的覆盖范围。`replay_policy` 表达当用户需要重放完整上下文时，adapter 是否允许、偏好或强制使用 provider-native snapshot，以及 remote context 失效时是否允许显式 fallback。`provider_options` 只用于承载少量不可移植但必要的厂商专有参数。
 
 generation 响应的核心语义是：
 
@@ -565,6 +572,18 @@ capability 是能力描述和校验辅助，不是自动决策机制。调用前
 
 不改变。previous response、stored response、context cache 等能力只是 provider-side optimization。`vatbrain` 的语义事实仍应来自用户传入的完整上下文序列。provider conversation 持久化上下文暂不进入通用 core 抽象。
 
+### 使用 previous response 时是否仍要把完整 items 全量传给 provider？
+
+不一定。用户侧仍应传入完整 `items`，但 adapter 可以在 provider 请求层做增量传输优化：当 `RemoteContextHint.previous_response_id` 存在，并且用户明确提供 `covered_item_count` 说明该 response id 已覆盖完整 `items` 的前缀时，adapter 可以按 provider 语义只发送未覆盖的追加 suffix。对 OpenAI Responses adapter 来说，存在 `previous_response_id` 时应发送增量 input；若 previous response 失效并且用户启用 fallback，adapter 必须移除失效 hint，并重新发送完整 `items`。
+
+### response id 失效后是否应该自动重放？
+
+默认不应自动重放，因为重试可能带来重复计费或重复副作用。用户可以显式启用 replay policy，让 adapter 在明确识别 remote context 失效时移除失效 hint，并基于完整 `Item` 序列重试。需要严格保留 provider 原生 item 信息时，应使用强制 replay；缺少可重放 provider-native snapshot 时必须报错。
+
+### 跨 provider replay 是否支持？
+
+暂不支持。provider-native snapshot 只对原 provider/API family 有意义。长期可研究受限跨 provider replay，但必须先定义兼容性报告，明确哪些 item 可迁移、哪些字段会丢失、哪些语义需要用户确认。
+
 ### 同时支持 Responses API 与 Chat Completions API 的 provider 应如何适配？
 
 应只适配 Responses API。Chat Completions API 可以作为迁移参考或 legacy provider 的实现参考，但不应为了兼容性在同一 provider adapter 中维护 Chat Completions 调用路径。
@@ -584,6 +603,7 @@ capability 是能力描述和校验辅助，不是自动决策机制。调用前
 ## 参考资料
 
 - [design/provider-capability-integration.CN.md](design/provider-capability-integration.CN.md)
+- [design/provider-native-replay.CN.md](design/provider-native-replay.CN.md)
 - [3rds/volengine/INDEX.md](3rds/volengine/INDEX.md)
 - [3rds/volengine/response_api.md](3rds/volengine/response_api.md)
 - [3rds/volengine/file_api.md](3rds/volengine/file_api.md)

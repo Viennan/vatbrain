@@ -47,6 +47,43 @@ class PartKind(StrEnum):
     FILE = "file"
 
 
+class AssistantMessagePhase(StrEnum):
+    """Phase of an assistant message in a multi-stage response."""
+
+    COMMENTARY = "commentary"
+    FINAL_ANSWER = "final_answer"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderItemSnapshot:
+    """Provider-native item payload for same-provider replay."""
+
+    provider: str
+    api_family: str
+    item_type: str
+    payload: dict[str, Any]
+    replayable: bool = True
+    captured_from: str | None = None
+    schema_version: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def key(self) -> str:
+        """Return the stable provider/api-family lookup key."""
+
+        return provider_snapshot_key(self.provider, self.api_family)
+
+    def __post_init__(self) -> None:
+        if not self.provider:
+            raise ValueError("ProviderItemSnapshot.provider is required.")
+        if not self.api_family:
+            raise ValueError("ProviderItemSnapshot.api_family is required.")
+        if not self.item_type:
+            raise ValueError("ProviderItemSnapshot.item_type is required.")
+        object.__setattr__(self, "payload", dict(self.payload))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
 @dataclass(frozen=True, slots=True)
 class TextPart:
     """A text content part."""
@@ -154,7 +191,9 @@ class MessageItem:
     role: Role
     parts: tuple[ContentPart, ...]
     purpose: ItemPurpose | None = None
+    assistant_phase: AssistantMessagePhase | str | None = None
     id: str | None = None
+    provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
     kind: ClassVar[ItemKind] = ItemKind.MESSAGE
 
@@ -164,23 +203,38 @@ class MessageItem:
         parts: list[ContentPart] | tuple[ContentPart, ...] | str,
         *,
         purpose: ItemPurpose | str | None = None,
+        assistant_phase: AssistantMessagePhase | str | None = None,
         id: str | None = None,
+        provider_snapshots: list[ProviderItemSnapshot] | tuple[ProviderItemSnapshot, ...] = (),
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        object.__setattr__(self, "role", Role(role))
+        normalized_role = Role(role)
+        object.__setattr__(self, "role", normalized_role)
         if isinstance(parts, str):
             normalized_parts: tuple[ContentPart, ...] = (TextPart(parts),)
         else:
             normalized_parts = tuple(parts)
         if not normalized_parts:
             raise ValueError("MessageItem requires at least one content part.")
+        try:
+            normalized_phase = (
+                AssistantMessagePhase(assistant_phase)
+                if assistant_phase is not None
+                else None
+            )
+        except ValueError:
+            normalized_phase = assistant_phase
+        if normalized_phase is not None and normalized_role != Role.ASSISTANT:
+            raise ValueError("MessageItem.assistant_phase is only valid for assistant messages.")
         object.__setattr__(self, "parts", normalized_parts)
         object.__setattr__(
             self,
             "purpose",
             ItemPurpose(purpose) if purpose is not None else None,
         )
+        object.__setattr__(self, "assistant_phase", normalized_phase)
         object.__setattr__(self, "id", id)
+        object.__setattr__(self, "provider_snapshots", tuple(provider_snapshots))
         object.__setattr__(self, "metadata", dict(metadata or {}))
 
     @classmethod
@@ -196,8 +250,13 @@ class MessageItem:
         return cls(Role.USER, parts, purpose=ItemPurpose.QUERY)
 
     @classmethod
-    def assistant(cls, parts: list[ContentPart] | tuple[ContentPart, ...] | str) -> MessageItem:
-        return cls(Role.ASSISTANT, parts, purpose=ItemPurpose.ANSWER)
+    def assistant(
+        cls,
+        parts: list[ContentPart] | tuple[ContentPart, ...] | str,
+        *,
+        assistant_phase: AssistantMessagePhase | str | None = None,
+    ) -> MessageItem:
+        return cls(Role.ASSISTANT, parts, purpose=ItemPurpose.ANSWER, assistant_phase=assistant_phase)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,9 +269,14 @@ class FunctionCallItem:
     id: str | None = None
     status: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     kind: ClassVar[ItemKind] = ItemKind.FUNCTION_CALL
     role: ClassVar[Role] = Role.ASSISTANT
     purpose: ClassVar[ItemPurpose] = ItemPurpose.TOOL_IO
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provider_snapshots", tuple(self.provider_snapshots))
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,9 +287,14 @@ class FunctionResultItem:
     output: str
     id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     kind: ClassVar[ItemKind] = ItemKind.FUNCTION_RESULT
     role: ClassVar[Role] = Role.TOOL
     purpose: ClassVar[ItemPurpose] = ItemPurpose.TOOL_IO
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "provider_snapshots", tuple(self.provider_snapshots))
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,17 +309,42 @@ class ReasoningItem:
     id: str | None = None
     status: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     raw: Any | None = None
     kind: ClassVar[ItemKind] = ItemKind.REASONING
     role: ClassVar[Role] = Role.ASSISTANT
     purpose: ClassVar[ItemPurpose] = ItemPurpose.CONTEXT
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "provider_snapshots", tuple(self.provider_snapshots))
+        object.__setattr__(self, "metadata", dict(self.metadata))
         if self.text is None and self.summary is None and self.raw is None:
             raise ValueError("ReasoningItem requires text, summary, or raw.")
 
 
 Item = MessageItem | FunctionCallItem | FunctionResultItem | ReasoningItem
+
+
+def provider_snapshot_key(provider: str, api_family: str) -> str:
+    """Build the canonical provider snapshot lookup key."""
+
+    return f"{provider}.{api_family}"
+
+
+def provider_snapshot_for(
+    item: Item,
+    *,
+    provider: str,
+    api_family: str,
+    replayable: bool = True,
+) -> ProviderItemSnapshot | None:
+    """Return the matching provider-native snapshot for an item, if present."""
+
+    key = provider_snapshot_key(provider, api_family)
+    for snapshot in getattr(item, "provider_snapshots", ()):
+        if snapshot.key == key and (not replayable or snapshot.replayable):
+            return snapshot
+    return None
 
 
 def _validate_single_source(name: str, **sources: str | None) -> None:

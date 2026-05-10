@@ -1,13 +1,14 @@
 # vatbrain 知识库索引
 
 状态：持续维护  
-最近更新：2026-05-06
+最近更新：2026-05-10
 
 ## Design
 
 - [design/draft.CN.md](design/draft.CN.md)：项目冷启动草稿，记录 `vatbrain` 的初始目标和早期设计构想。
 - [design/high-level-design.CN.md](design/high-level-design.CN.md)：高层次设计方案，定义设计哲学、模块职责、核心抽象、capability 来源与可靠性、非目标、演进路线和 FAQ。
 - [design/provider-capability-integration.CN.md](design/provider-capability-integration.CN.md)：Provider 能力整合设计，基于火山方舟资料完善 provider-side state、文件资源、多模态 embedding、media generation 和异步任务等跨厂商抽象；provider-hosted/remote tools 暂缓进入通用 core。
+- [design/provider-native-replay.CN.md](design/provider-native-replay.CN.md)：Provider 原生重放设计，规划 provider item snapshot、显式 replay policy、强制 replay、remote context 覆盖范围、OpenAI 差分传输、OpenAI `phase` 语义评估与跨 provider replay 长期 TODO。
 
 ## Third-party References
 
@@ -24,5 +25,5 @@
 
 ## User Docs
 
-- [user/python/quickstart.CN.md](user/python/quickstart.CN.md)：Python 用户指南，说明第一阶段编程模型、OpenAI client、generation、streaming、工具调用、embedding 和 capability 用法。
+- [user/python/quickstart.CN.md](user/python/quickstart.CN.md)：Python 用户指南，说明第一阶段编程模型、OpenAI client、generation、remote context 覆盖范围、streaming、工具调用、embedding 和 capability 用法。
 - [user/python/STATUS.md](user/python/STATUS.md)：Python 用户文档状态，记录已完成内容与待完善项。
