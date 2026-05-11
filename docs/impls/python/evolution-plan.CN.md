@@ -2,7 +2,7 @@
 
 状态：演进计划  
 日期：2026-05-06  
-最近更新：2026-05-10
+最近更新：2026-05-11
 
 ## 背景
 
@@ -178,6 +178,8 @@ ItemKind
 - 更明确的 `ReasoningConfig.effort`
 - `ResponseFormat` 的 JSON schema name/description/schema/strict
 - stream event metadata 字段增强
+
+Python 语言层可以增加 Pydantic structured output 便捷层，作为 `ResponseFormat` 的 schema 生成与最终响应解析 helper；该能力不改变 core 的 JSON Schema-only 原则，也不恢复 JSON mode 兼容。方案见 [impls/python/pydantic-structured-output.CN.md](impls/python/pydantic-structured-output.CN.md)。
 
 ##### Embeddings
 

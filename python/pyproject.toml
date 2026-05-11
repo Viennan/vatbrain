@@ -12,7 +12,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pydantic = [
+    "pydantic>=2,<3",
+]
 test = [
+    "pydantic>=2,<3",
     "pytest>=8.0",
 ]
 

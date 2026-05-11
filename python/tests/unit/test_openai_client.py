@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from whero.vatbrain import (
     ClientConfig,
@@ -62,6 +63,16 @@ class AsyncFallbackResponses:
         return self.result
 
 
+class AsyncFakeResponses:
+    def __init__(self, result: object) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    async def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return self.result
+
+
 class FakeEmbeddings:
     def __init__(self, result: object) -> None:
         self.result = result
@@ -95,6 +106,11 @@ class FakeAsyncOpenAIFallback:
         self.responses = AsyncFallbackResponses(first_exc=first_exc, result=response)
 
 
+class FakeAsyncOpenAI:
+    def __init__(self, *, response: object) -> None:
+        self.responses = AsyncFakeResponses(response)
+
+
 class FakeOpenAIError(Exception):
     status_code = 400
     request_id = "req_1"
@@ -118,6 +134,11 @@ class FakePreviousResponseExpiredError(Exception):
             "message": "The previous response has expired.",
         }
     }
+
+
+class Contact(BaseModel):
+    name: str
+    email: str
 
 
 def test_client_generate_uses_explicit_model_and_common_options() -> None:
@@ -201,6 +222,42 @@ def test_client_generate_does_not_replay_remote_context_by_default() -> None:
         raise AssertionError("Expected ProviderRequestError")
 
 
+def test_client_generate_parsed_builds_response_format_and_parses_output() -> None:
+    raw_response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                id="msg_1",
+                role="assistant",
+                content=[
+                    SimpleNamespace(
+                        type="output_text",
+                        text='{"name":"Ada","email":"ada@example.test"}',
+                    )
+                ],
+            )
+        ],
+        usage=None,
+    )
+    fake = FakeOpenAI(response=raw_response)
+    client = OpenAIClient(client=fake, async_client=object())
+
+    parsed = client.generate_parsed(
+        model="gpt-test",
+        items=[MessageItem.user("extract")],
+        output_type=Contact,
+    )
+
+    assert fake.responses.calls[0]["text"]["format"]["type"] == "json_schema"
+    assert fake.responses.calls[0]["text"]["format"]["strict"] is True
+    assert fake.responses.calls[0]["text"]["format"]["name"] == "Contact"
+    assert parsed.response.id == "resp_1"
+    assert parsed.output_parsed == Contact(name="Ada", email="ada@example.test")
+
+
 @pytest.mark.anyio
 async def test_async_client_generate_replays_without_remote_context_when_enabled() -> None:
     raw_response = SimpleNamespace(
@@ -231,6 +288,41 @@ async def test_async_client_generate_replays_without_remote_context_when_enabled
     assert len(fake_async.responses.calls[0]["input"]) == 1
     assert "previous_response_id" not in fake_async.responses.calls[1]
     assert len(fake_async.responses.calls[1]["input"]) == 2
+
+
+@pytest.mark.anyio
+async def test_async_client_generate_parsed_builds_response_format_and_parses_output() -> None:
+    raw_response = SimpleNamespace(
+        id="resp_async_parsed",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                id="msg_1",
+                role="assistant",
+                content=[
+                    SimpleNamespace(
+                        type="output_text",
+                        text='{"name":"Ada","email":"ada@example.test"}',
+                    )
+                ],
+            )
+        ],
+        usage=None,
+    )
+    fake_async = FakeAsyncOpenAI(response=raw_response)
+    client = OpenAIClient(client=object(), async_client=fake_async)
+
+    parsed = await client.agenerate_parsed(
+        model="gpt-test",
+        items=[MessageItem.user("extract")],
+        output_type=Contact,
+    )
+
+    assert fake_async.responses.calls[0]["text"]["format"]["name"] == "Contact"
+    assert parsed.response.id == "resp_async_parsed"
+    assert parsed.output_parsed.email == "ada@example.test"
 
 
 def test_client_stream_generate_maps_events() -> None:

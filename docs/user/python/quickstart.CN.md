@@ -2,7 +2,7 @@
 
 状态：v0.3  
 日期：2026-05-05
-最近更新：2026-05-06
+最近更新：2026-05-12
 
 ## 编程模型
 
@@ -256,6 +256,44 @@ response = client.generate(
     ),
 )
 ```
+
+Python 侧也可以用 Pydantic v2 生成 schema 并解析最终响应。该 helper 仍然产出普通 `ResponseFormat`，不会绕过 `vatbrain` 的 provider adapter：
+
+```python
+from pydantic import BaseModel
+
+from whero.vatbrain.structured import pydantic_output
+
+
+class Contact(BaseModel):
+    name: str
+    email: str
+
+
+contact_output = pydantic_output(Contact, name="contact")
+
+response = client.generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Extract a contact.")],
+    response_format=contact_output.response_format,
+)
+
+contact = contact_output.parse_response(response).output_parsed
+```
+
+OpenAI client 还提供 `generate_parsed()` / `agenerate_parsed()` 薄封装：
+
+```python
+parsed = client.generate_parsed(
+    model="gpt-5.1",
+    items=[MessageItem.user("Extract a contact.")],
+    output_type=Contact,
+)
+
+contact = parsed.output_parsed
+```
+
+Pydantic helper 需要安装 `whero-vatbrain[pydantic]`。默认 schema name 来自 Pydantic type 名称，description 来自 type docstring，strict 为 `True`；更多细节见 [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
 
 ## 工具调用
 

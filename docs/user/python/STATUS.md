@@ -2,13 +2,14 @@
 
 状态：v0.3 已更新  
 日期：2026-05-05
-最近更新：2026-05-10
+最近更新：2026-05-11
 
 ## 已完成
 
 - Python 快速开始与编程模型：[user/python/quickstart.CN.md](user/python/quickstart.CN.md)。
+- Pydantic Structured Output 编程模型：[user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
 - OpenAI provider client 的基本使用方式。
-- generation、streaming、stream accumulator、JSON Schema-only structured output、工具调用、embedding、capability 的基础示例。
+- generation、streaming、stream accumulator、JSON Schema-only structured output、Pydantic structured output helper、工具调用、embedding、capability 的基础示例。
 - 说明 OpenAI Responses API 下 `StreamOptions(include_usage=True)` 不映射为 `stream_options.include_usage`。
 - 说明 provider-native snapshot、ReplayPolicy、OpenAI `phase` 保真、`AssistantMessagePhase` 基础用法和 response id 失效 fallback。
 - 说明 v0.3 新增 core models、RemoteContextHint、多模态 embedding 表达，以及这些模型与当前 OpenAI adapter 支持范围的边界。
