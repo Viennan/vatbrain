@@ -6,6 +6,9 @@ from whero.vatbrain import (
     AssistantMessagePhase,
     AudioPart,
     FilePart,
+    FunctionCallItem,
+    FunctionResultItem,
+    FunctionToolType,
     ImagePart,
     ItemKind,
     MessageItem,
@@ -77,6 +80,32 @@ def test_file_part_accepts_provider_file_id() -> None:
 
     assert part.file_id == "file_1"
     assert part.provider == "openai"
+
+
+def test_function_items_keep_protocol_fields() -> None:
+    call = FunctionCallItem(name="lookup", arguments='{"q":"x"}', call_id="call_1")
+    result = FunctionResultItem(call_id="call_1", output='{"ok":true}')
+
+    assert call.name == "lookup"
+    assert call.arguments == '{"q":"x"}'
+    assert call.type == FunctionToolType.FUNCTION
+    assert call.input is None
+    assert result.call_id == "call_1"
+    assert result.tool_type is None
+
+
+def test_custom_function_call_item_keeps_raw_input() -> None:
+    call = FunctionCallItem(
+        name="run_code",
+        arguments="print('hello')",
+        call_id="call_1",
+        type="custom",
+    )
+    result = FunctionResultItem(call_id="call_1", output="hello\n", tool_type="custom")
+
+    assert call.type == FunctionToolType.CUSTOM
+    assert call.input == "print('hello')"
+    assert result.tool_type == FunctionToolType.CUSTOM
 
 
 def test_reasoning_item_defaults_to_not_replayable() -> None:

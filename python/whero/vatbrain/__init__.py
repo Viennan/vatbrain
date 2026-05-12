@@ -71,6 +71,7 @@ from whero.vatbrain.core.resources import (
     FileUploadRequest,
 )
 from whero.vatbrain.core.tools import (
+    FunctionToolType,
     FunctionToolSpec,
     ToolChoice,
     ToolExecutionOwner,
@@ -100,6 +101,7 @@ __all__ = [
     "FunctionCallItem",
     "FunctionResultItem",
     "FunctionToolSpec",
+    "FunctionToolType",
     "GenerationConfig",
     "GenerationCapability",
     "GenerationRequest",

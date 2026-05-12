@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import Any, Iterable
 
 from whero.vatbrain.core.items import FunctionCallItem, Item, MessageItem, Role, TextPart
+from whero.vatbrain.core.tools import FunctionToolType
 from whero.vatbrain.core.tools import ToolChoice, ToolSpec
 from whero.vatbrain.core.usage import Usage
 
@@ -280,11 +281,14 @@ class GenerationStreamAccumulator:
                 "arguments": event.item.arguments,
                 "call_id": event.item.call_id,
                 "status": event.item.status,
+                "type": event.item.type,
+                "input": event.item.input,
                 "metadata": dict(event.item.metadata),
             }
         elif event.type == StreamEventType.TOOL_CALL_DELTA.value:
             key = self._function_key(event)
             self._remember_order("function_call", key)
+            tool_type = self._tool_type_from_event(event)
             function_call = self._function_calls.setdefault(
                 key,
                 {
@@ -293,10 +297,15 @@ class GenerationStreamAccumulator:
                     "arguments": "",
                     "call_id": event.metadata.get("call_id", ""),
                     "status": None,
+                    "type": tool_type,
+                    "input": "",
                     "metadata": {},
                 },
             )
             function_call["arguments"] = str(function_call.get("arguments") or "") + str(event.delta or "")
+            if tool_type == FunctionToolType.CUSTOM:
+                function_call["type"] = tool_type
+                function_call["input"] = str(function_call.get("input") or "") + str(event.delta or "")
             if event.metadata.get("name") and not function_call.get("name"):
                 function_call["name"] = event.metadata["name"]
             if event.metadata.get("call_id") and not function_call.get("call_id"):
@@ -304,6 +313,7 @@ class GenerationStreamAccumulator:
         elif event.type == StreamEventType.TOOL_CALL_COMPLETED.value:
             key = self._function_key(event)
             self._remember_order("function_call", key)
+            tool_type = self._tool_type_from_event(event)
             function_call = self._function_calls.setdefault(
                 key,
                 {
@@ -312,11 +322,17 @@ class GenerationStreamAccumulator:
                     "arguments": "",
                     "call_id": event.metadata.get("call_id", ""),
                     "status": None,
+                    "type": tool_type,
+                    "input": "",
                     "metadata": {},
                 },
             )
             if event.delta is not None:
                 function_call["arguments"] = str(event.delta)
+                if tool_type == FunctionToolType.CUSTOM:
+                    function_call["input"] = str(event.delta)
+            if tool_type == FunctionToolType.CUSTOM:
+                function_call["type"] = tool_type
             if event.metadata.get("name"):
                 function_call["name"] = event.metadata["name"]
             if event.metadata.get("call_id"):
@@ -366,6 +382,8 @@ class GenerationStreamAccumulator:
                         arguments=str(call.get("arguments") or ""),
                         call_id=str(call.get("call_id") or ""),
                         status=call.get("status"),
+                        type=call.get("type", FunctionToolType.FUNCTION),
+                        input=call.get("input"),
                         metadata=dict(call.get("metadata") or {}),
                     )
                 )
@@ -429,3 +447,11 @@ class GenerationStreamAccumulator:
             return str(event.delta)
         text = event.metadata.get("text")
         return str(text) if text is not None else None
+
+    @staticmethod
+    def _tool_type_from_event(event: GenerationStreamEvent) -> FunctionToolType:
+        raw_type = event.metadata.get("tool_type", FunctionToolType.FUNCTION)
+        try:
+            return FunctionToolType(raw_type)
+        except ValueError:
+            return FunctionToolType.FUNCTION

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, ClassVar, Literal
 
+from whero.vatbrain.core.tools import FunctionToolType
+
 
 class Role(StrEnum):
     """Source or speaker role for a content item."""
@@ -268,6 +270,8 @@ class FunctionCallItem:
     call_id: str
     id: str | None = None
     status: str | None = None
+    type: FunctionToolType | str = FunctionToolType.FUNCTION
+    input: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     kind: ClassVar[ItemKind] = ItemKind.FUNCTION_CALL
@@ -275,6 +279,10 @@ class FunctionCallItem:
     purpose: ClassVar[ItemPurpose] = ItemPurpose.TOOL_IO
 
     def __post_init__(self) -> None:
+        normalized_type = FunctionToolType(self.type)
+        object.__setattr__(self, "type", normalized_type)
+        if normalized_type == FunctionToolType.CUSTOM and self.input is None:
+            object.__setattr__(self, "input", self.arguments)
         object.__setattr__(self, "provider_snapshots", tuple(self.provider_snapshots))
         object.__setattr__(self, "metadata", dict(self.metadata))
 
@@ -286,6 +294,7 @@ class FunctionResultItem:
     call_id: str
     output: str
     id: str | None = None
+    tool_type: FunctionToolType | str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     provider_snapshots: tuple[ProviderItemSnapshot, ...] = ()
     kind: ClassVar[ItemKind] = ItemKind.FUNCTION_RESULT
@@ -293,6 +302,8 @@ class FunctionResultItem:
     purpose: ClassVar[ItemPurpose] = ItemPurpose.TOOL_IO
 
     def __post_init__(self) -> None:
+        if self.tool_type is not None:
+            object.__setattr__(self, "tool_type", FunctionToolType(self.tool_type))
         object.__setattr__(self, "provider_snapshots", tuple(self.provider_snapshots))
         object.__setattr__(self, "metadata", dict(self.metadata))
 

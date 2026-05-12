@@ -125,6 +125,7 @@ class ToolCapability:
     """Tool API family capability."""
 
     user_function_tools: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
+    custom_tools: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     parallel_tool_calls: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     tool_choice: CapabilityValue[bool] = field(default_factory=CapabilityValue.unknown)
     metadata: dict[str, Any] = field(default_factory=dict)

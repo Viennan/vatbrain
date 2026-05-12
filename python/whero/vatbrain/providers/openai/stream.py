@@ -10,6 +10,7 @@ from whero.vatbrain.core.generation import (
     StreamEventType,
 )
 from whero.vatbrain.core.items import FunctionCallItem
+from whero.vatbrain.core.tools import FunctionToolType
 from whero.vatbrain.providers.openai.mapper import PROVIDER, from_openai_generation_response, usage_from_openai
 
 
@@ -46,7 +47,8 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
     if event_type == "response.output_item.added":
         item = _get_attr(event, "item", None)
         normalized_item = None
-        if _get_attr(item, "type", None) == "function_call":
+        item_type = _get_attr(item, "type", None)
+        if item_type == "function_call":
             normalized_item = FunctionCallItem(
                 id=_get_attr(item, "id", None),
                 name=_get_attr(item, "name", ""),
@@ -54,6 +56,18 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
                 call_id=_get_attr(item, "call_id", ""),
                 status=_get_attr(item, "status", None),
             )
+        elif item_type == "custom_tool_call":
+            input_text = _get_attr(item, "input", "")
+            normalized_item = FunctionCallItem(
+                id=_get_attr(item, "id", None),
+                name=_get_attr(item, "name", ""),
+                arguments=input_text,
+                call_id=_get_attr(item, "call_id", ""),
+                status=_get_attr(item, "status", None),
+                type=FunctionToolType.CUSTOM,
+                input=input_text,
+            )
+            metadata["tool_type"] = FunctionToolType.CUSTOM.value
         return GenerationStreamEvent(
             type=StreamEventType.ITEM_CREATED.value,
             sequence=sequence,
@@ -67,7 +81,8 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
     if event_type == "response.output_item.done":
         item = _get_attr(event, "item", None)
         normalized_item = None
-        if _get_attr(item, "type", None) == "function_call":
+        item_type = _get_attr(item, "type", None)
+        if item_type == "function_call":
             normalized_item = FunctionCallItem(
                 id=_get_attr(item, "id", None),
                 name=_get_attr(item, "name", ""),
@@ -75,6 +90,18 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
                 call_id=_get_attr(item, "call_id", ""),
                 status=_get_attr(item, "status", None),
             )
+        elif item_type == "custom_tool_call":
+            input_text = _get_attr(item, "input", "")
+            normalized_item = FunctionCallItem(
+                id=_get_attr(item, "id", None),
+                name=_get_attr(item, "name", ""),
+                arguments=input_text,
+                call_id=_get_attr(item, "call_id", ""),
+                status=_get_attr(item, "status", None),
+                type=FunctionToolType.CUSTOM,
+                input=input_text,
+            )
+            metadata["tool_type"] = FunctionToolType.CUSTOM.value
         return GenerationStreamEvent(
             type=StreamEventType.ITEM_COMPLETED.value,
             sequence=sequence,
@@ -141,6 +168,17 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             metadata=metadata,
             raw_event=event,
         )
+    if event_type == "response.custom_tool_call_input.delta":
+        return GenerationStreamEvent(
+            type=StreamEventType.TOOL_CALL_DELTA.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=_get_attr(event, "delta", ""),
+            metadata={**metadata, "tool_type": FunctionToolType.CUSTOM.value},
+            raw_event=event,
+        )
     if event_type in {"response.function_call_arguments.done", "response.tool_call.done"}:
         return GenerationStreamEvent(
             type=StreamEventType.TOOL_CALL_COMPLETED.value,
@@ -150,6 +188,18 @@ def from_openai_stream_event(event: Any, *, sequence: int) -> GenerationStreamEv
             item_id=item_id,
             delta=_get_attr(event, "arguments", None),
             metadata=metadata,
+            raw_event=event,
+        )
+    if event_type == "response.custom_tool_call_input.done":
+        input_text = _get_attr(event, "input", _get_attr(event, "text", None))
+        return GenerationStreamEvent(
+            type=StreamEventType.TOOL_CALL_COMPLETED.value,
+            sequence=sequence,
+            provider=PROVIDER,
+            response_id=response_id,
+            item_id=item_id,
+            delta=input_text,
+            metadata={**metadata, "tool_type": FunctionToolType.CUSTOM.value},
             raw_event=event,
         )
     if event_type == "response.reasoning_summary_part.added":

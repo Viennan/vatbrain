@@ -36,7 +36,7 @@ from whero.vatbrain.core.items import (
     TextPart,
     provider_snapshot_for,
 )
-from whero.vatbrain.core.tools import FunctionToolSpec, ToolChoice, ToolSpec
+from whero.vatbrain.core.tools import FunctionToolSpec, FunctionToolType, ToolChoice, ToolSpec
 from whero.vatbrain.core.usage import Usage
 
 PROVIDER = "openai"
@@ -213,17 +213,21 @@ def _item_to_openai_input(item: Item, replay_policy: ReplayPolicy | None = None)
         return _message_to_openai_input(item)
     if isinstance(item, FunctionResultItem):
         return {
-            "type": "function_call_output",
+            "type": _function_result_type_to_openai(item),
             "call_id": item.call_id,
             "output": item.output,
         }
     if isinstance(item, FunctionCallItem):
-        return {
-            "type": "function_call",
+        payload = {
+            "type": _function_call_type_to_openai(item),
             "name": item.name,
-            "arguments": item.arguments,
             "call_id": item.call_id,
         }
+        if item.type == FunctionToolType.CUSTOM:
+            payload["input"] = item.input if item.input is not None else item.arguments
+        else:
+            payload["arguments"] = item.arguments
+        return payload
     raise InvalidItemError(f"Unsupported generation item: {item!r}")
 
 
@@ -267,6 +271,14 @@ def _image_part_to_openai(part: ImagePart) -> dict[str, Any]:
 def _tool_to_openai_tool(tool: ToolSpec) -> dict[str, Any]:
     if not isinstance(tool, FunctionToolSpec):
         raise UnsupportedCapabilityError("OpenAI adapter currently maps function tools only.")
+    if tool.type == FunctionToolType.CUSTOM:
+        payload: dict[str, Any] = {
+            "type": "custom",
+            "name": tool.name,
+        }
+        if tool.description is not None:
+            payload["description"] = tool.description
+        return payload
     payload: dict[str, Any] = {
         "type": "function",
         "name": tool.name,
@@ -362,6 +374,18 @@ def _openai_output_item_to_item(item: Any) -> Item:
                 status=_get_attr(item, "status", None),
                 provider_snapshots=(_provider_snapshot(item, replayable=True),),
             )
+        if item_type == "custom_tool_call":
+            input_text = _get_attr(item, "input", "")
+            return FunctionCallItem(
+                id=_get_attr(item, "id", None),
+                name=_get_attr(item, "name", ""),
+                arguments=input_text,
+                call_id=_get_attr(item, "call_id", ""),
+                status=_get_attr(item, "status", None),
+                type=FunctionToolType.CUSTOM,
+                input=input_text,
+                provider_snapshots=(_provider_snapshot(item, replayable=True),),
+            )
     except Exception as exc:
         raise ProviderResponseMappingError(
             f"Malformed OpenAI output item: {item_type!r}",
@@ -403,6 +427,18 @@ def _embedding_input_to_text(item: EmbeddingInput) -> str:
         else:
             raise InvalidItemError("OpenAI adapter v0.1 supports text embedding inputs only.")
     return "\n".join(texts)
+
+
+def _function_call_type_to_openai(item: FunctionCallItem) -> str:
+    return "custom_tool_call" if item.type == FunctionToolType.CUSTOM else "function_call"
+
+
+def _function_result_type_to_openai(item: FunctionResultItem) -> str:
+    return (
+        "custom_tool_call_output"
+        if item.tool_type == FunctionToolType.CUSTOM
+        else "function_call_output"
+    )
 
 
 def _embedding_value(value: Any) -> list[float] | str:

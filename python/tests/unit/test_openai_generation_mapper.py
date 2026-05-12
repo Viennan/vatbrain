@@ -7,6 +7,7 @@ import pytest
 from whero.vatbrain import (
     AssistantMessagePhase,
     FunctionResultItem,
+    FunctionToolType,
     GenerationConfig,
     GenerationRequest,
     MessageItem,
@@ -94,6 +95,43 @@ def test_generation_request_maps_common_reasoning_and_tool_config() -> None:
     assert params["parallel_tool_calls"] is False
     assert params["tool_choice"] == "auto"
     assert params["metadata"] == {"trace_id": "t-1"}
+
+
+def test_generation_request_maps_custom_tool_without_parameters() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[
+            MessageItem.user("run code"),
+            FunctionResultItem(call_id="call_1", output="hello\n", tool_type="custom"),
+        ],
+        tools=[
+            ToolSpec(
+                name="run_code",
+                description="Run Python code.",
+                type="custom",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"ignored": {"type": "string"}},
+                },
+                strict=True,
+            )
+        ],
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["tools"] == [
+        {
+            "type": "custom",
+            "name": "run_code",
+            "description": "Run Python code.",
+        }
+    ]
+    assert params["input"][1] == {
+        "type": "custom_tool_call_output",
+        "call_id": "call_1",
+        "output": "hello\n",
+    }
 
 
 def test_assistant_phase_maps_to_openai_message_phase() -> None:
@@ -313,12 +351,64 @@ def test_openai_response_maps_message_function_call_and_usage() -> None:
     assert isinstance(mapped.output_items[1], FunctionCallItem)
     assert mapped.output_items[1].name == "lookup"
     assert mapped.output_items[1].call_id == "call_1"
+    assert mapped.output_items[1].type == FunctionToolType.FUNCTION
     assert mapped.output_items[1].provider_snapshots[0].payload["type"] == "function_call"
     assert mapped.usage is not None
     assert mapped.usage.input_tokens == 10
     assert mapped.usage.output_tokens == 5
     assert mapped.usage.cached_tokens == 3
     assert mapped.usage.reasoning_tokens == 2
+
+
+def test_openai_response_maps_custom_tool_call() -> None:
+    response = SimpleNamespace(
+        id="resp_1",
+        model="gpt-test",
+        status="completed",
+        output=[
+            SimpleNamespace(
+                type="custom_tool_call",
+                id="ctc_1",
+                name="run_code",
+                input="print('hello')",
+                call_id="call_1",
+                status="completed",
+            )
+        ],
+        usage=None,
+    )
+
+    mapped = from_openai_generation_response(response)
+
+    assert isinstance(mapped.output_items[0], FunctionCallItem)
+    assert mapped.output_items[0].type == FunctionToolType.CUSTOM
+    assert mapped.output_items[0].name == "run_code"
+    assert mapped.output_items[0].input == "print('hello')"
+    assert mapped.output_items[0].arguments == "print('hello')"
+    assert mapped.output_items[0].provider_snapshots[0].payload["type"] == "custom_tool_call"
+
+
+def test_openai_generation_mapper_maps_custom_tool_call_input() -> None:
+    request = GenerationRequest(
+        model="gpt-test",
+        items=[
+            FunctionCallItem(
+                name="run_code",
+                arguments="print('hello')",
+                call_id="call_1",
+                type="custom",
+            )
+        ],
+    )
+
+    params = to_openai_generation_params(request)
+
+    assert params["input"][0] == {
+        "type": "custom_tool_call",
+        "name": "run_code",
+        "input": "print('hello')",
+        "call_id": "call_1",
+    }
 
 
 def test_openai_generation_mapper_replays_provider_snapshot_payload() -> None:

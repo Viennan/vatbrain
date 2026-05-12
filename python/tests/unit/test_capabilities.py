@@ -31,6 +31,7 @@ def test_openai_adapter_capability_is_provider_level() -> None:
     assert capability.embedding.sparse.value is False
     assert capability.tools is not None
     assert capability.tools.user_function_tools.value is True
+    assert capability.tools.custom_tools.value is True
 
 
 def test_model_capability_defaults_to_unknown_and_accepts_overrides() -> None:

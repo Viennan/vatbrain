@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from whero.vatbrain import GenerationStreamAccumulator, MessageItem, TextPart
+from whero.vatbrain import FunctionToolType, GenerationStreamAccumulator, MessageItem, TextPart
 from whero.vatbrain.core.generation import StreamEventType
 from whero.vatbrain.core.items import FunctionCallItem
 from whero.vatbrain.providers.openai.stream import from_openai_stream_event
@@ -97,6 +97,45 @@ def test_stream_function_call_item_added_maps_to_function_call_item() -> None:
     assert isinstance(mapped.item, FunctionCallItem)
     assert mapped.item.name == "lookup"
     assert mapped.metadata["output_index"] == 1
+
+
+def test_stream_custom_tool_call_item_added_maps_to_function_call_item() -> None:
+    event = SimpleNamespace(
+        type="response.output_item.added",
+        response_id="resp_1",
+        output_index=1,
+        item=SimpleNamespace(
+            type="custom_tool_call",
+            id="ctc_1",
+            name="run_code",
+            input="print('hello')",
+            call_id="call_1",
+            status="in_progress",
+        ),
+    )
+
+    mapped = from_openai_stream_event(event, sequence=3)
+
+    assert mapped.type == StreamEventType.ITEM_CREATED.value
+    assert isinstance(mapped.item, FunctionCallItem)
+    assert mapped.item.type == FunctionToolType.CUSTOM
+    assert mapped.item.input == "print('hello')"
+    assert mapped.metadata["tool_type"] == "custom"
+
+
+def test_stream_custom_tool_input_delta_maps_to_tool_delta() -> None:
+    event = {
+        "type": "response.custom_tool_call_input.delta",
+        "response_id": "resp_1",
+        "item_id": "ctc_1",
+        "delta": "print",
+    }
+
+    mapped = from_openai_stream_event(event, sequence=4)
+
+    assert mapped.type == StreamEventType.TOOL_CALL_DELTA.value
+    assert mapped.delta == "print"
+    assert mapped.metadata["tool_type"] == "custom"
 
 
 def test_stream_reasoning_summary_delta_maps_to_reasoning_delta() -> None:
@@ -242,6 +281,49 @@ def test_stream_accumulator_rebuilds_function_call_arguments() -> None:
     assert isinstance(response.output_items[0], FunctionCallItem)
     assert response.output_items[0].name == "lookup"
     assert response.output_items[0].arguments == '{"q":"x"}'
+
+
+def test_stream_accumulator_rebuilds_custom_tool_input() -> None:
+    accumulator = GenerationStreamAccumulator(provider="openai")
+    events = [
+        SimpleNamespace(
+            type="response.output_item.added",
+            response_id="resp_1",
+            output_index=0,
+            item=SimpleNamespace(
+                type="custom_tool_call",
+                id="ctc_1",
+                name="run_code",
+                input="",
+                call_id="call_1",
+                status="in_progress",
+            ),
+        ),
+        {
+            "type": "response.custom_tool_call_input.delta",
+            "response_id": "resp_1",
+            "item_id": "ctc_1",
+            "output_index": 0,
+            "delta": "print",
+        },
+        {
+            "type": "response.custom_tool_call_input.done",
+            "response_id": "resp_1",
+            "item_id": "ctc_1",
+            "output_index": 0,
+            "input": "print('hello')",
+        },
+    ]
+    for sequence, event in enumerate(events):
+        accumulator.add(from_openai_stream_event(event, sequence=sequence))
+
+    response = accumulator.to_response()
+
+    assert isinstance(response.output_items[0], FunctionCallItem)
+    assert response.output_items[0].type == FunctionToolType.CUSTOM
+    assert response.output_items[0].name == "run_code"
+    assert response.output_items[0].input == "print('hello')"
+    assert response.output_items[0].arguments == "print('hello')"
 
 
 def test_stream_accumulator_prefers_completed_response_when_it_has_output_items() -> None:

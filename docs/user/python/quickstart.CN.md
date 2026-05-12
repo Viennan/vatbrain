@@ -299,8 +299,21 @@ Pydantic helper 需要安装 `whero-vatbrain[pydantic]`。默认 schema name 来
 
 `vatbrain` 只定义工具协议，不执行工具。用户需要读取模型输出中的 `FunctionCallItem`，自行执行工具，然后把结果作为 `FunctionResultItem` 加入下一轮上下文。
 
+默认的 `ToolSpec` 是 function tool：模型输出 JSON string `arguments`，用户代码需要解析 arguments。
+
 ```python
+import json
+
 from whero.vatbrain import FunctionCallItem, FunctionResultItem, MessageItem, ToolSpec
+
+
+def get_weather(*, city: str) -> dict[str, object]:
+    return {
+        "city": city,
+        "temperature_c": 22,
+        "condition": "cloudy",
+    }
+
 
 tools = [
     ToolSpec(
@@ -329,12 +342,17 @@ response = client.generate(
 
 for output_item in response.output_items:
     if isinstance(output_item, FunctionCallItem):
-        tool_output = '{"city":"Shanghai","temperature_c":22}'
+        arguments = json.loads(output_item.arguments)
+        if output_item.name == "get_weather":
+            result = get_weather(city=arguments["city"])
+        else:
+            raise ValueError(f"Unknown tool call: {output_item.name}")
+
         items.append(output_item)
         items.append(
             FunctionResultItem(
                 call_id=output_item.call_id,
-                output=tool_output,
+                output=json.dumps(result, ensure_ascii=False),
             )
         )
 
@@ -346,6 +364,53 @@ followup = client.generate(
 ```
 
 这段流程由用户代码驱动；`vatbrain` 不会自动调用 `get_weather`，也不会自动发起 follow-up 请求。
+
+如果工具需要直接接收自然语言、代码或其他任意字符串输入，可以使用 custom tool。OpenAI adapter 会把 `ToolSpec(type="custom")` 映射为 OpenAI custom tool；custom tool 不使用 `parameters_schema`，模型输出保存在 `FunctionCallItem.input`：
+
+```python
+from whero.vatbrain import FunctionCallItem, FunctionResultItem, MessageItem, ToolSpec
+
+
+def run_code(source: str) -> str:
+    return "hello\n"
+
+
+tools = [
+    ToolSpec(
+        name="run_code",
+        description="Run Python code.",
+        type="custom",
+    )
+]
+
+items = [MessageItem.user("Use run_code to print hello.")]
+
+response = client.generate(
+    model="gpt-5.1",
+    items=items,
+    tools=tools,
+)
+
+for output_item in response.output_items:
+    if isinstance(output_item, FunctionCallItem) and output_item.type == "custom":
+        result = run_code(output_item.input or "")
+        items.append(output_item)
+        items.append(
+            FunctionResultItem(
+                call_id=output_item.call_id,
+                output=result,
+                tool_type=output_item.type,
+            )
+        )
+
+followup = client.generate(
+    model="gpt-5.1",
+    items=items,
+    tools=tools,
+)
+```
+
+空 `parameters_schema` 不等于 custom tool；想让模型直接输出 raw string input 时，应显式设置 `type="custom"`。
 
 ## Embedding
 
@@ -400,7 +465,7 @@ items = [
 
 `FilePart.local_path`、`AudioPart.local_path` 和 `VideoPart.local_path` 只是路径 metadata，不会自动读取文件或上传文件。需要上传文件时，未来 provider adapter 会提供显式 file/resource API。
 
-工具抽象当前只覆盖用户代码执行的 function tool。provider-hosted tool、remote tool 和 MCP tool 暂不暴露为通用 core 抽象。
+工具抽象当前只覆盖用户代码执行的 function/custom tool。provider-hosted tool、remote tool 和 MCP tool 暂不暴露为通用 core 抽象。
 
 ## Capability
 

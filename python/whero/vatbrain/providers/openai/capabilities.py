@@ -52,6 +52,7 @@ def get_adapter_capability() -> AdapterCapability:
         ),
         tools=ToolCapability(
             user_function_tools=CapabilityValue.adapter_builtin(True),
+            custom_tools=CapabilityValue.adapter_builtin(True),
             parallel_tool_calls=CapabilityValue.adapter_builtin(True),
             tool_choice=CapabilityValue.adapter_builtin(True),
         ),

@@ -4,6 +4,7 @@ import pytest
 
 from whero.vatbrain import (
     FunctionToolSpec,
+    FunctionToolType,
     ToolExecutionOwner,
     ToolSpec,
 )
@@ -14,7 +15,15 @@ def test_tool_spec_is_function_tool_compatible_alias() -> None:
 
     assert isinstance(tool, FunctionToolSpec)
     assert tool.type == "function"
+    assert tool.type == FunctionToolType.FUNCTION
     assert tool.execution_owner == ToolExecutionOwner.USER
+
+
+def test_tool_spec_accepts_custom_tool_type() -> None:
+    tool = ToolSpec(name="run_code", type="custom")
+
+    assert tool.type == FunctionToolType.CUSTOM
+    assert tool.parameters_schema == {}
 
 
 def test_function_tool_requires_name() -> None:
