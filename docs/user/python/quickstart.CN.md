@@ -1,16 +1,33 @@
-# Python 用户指南
+# Python 快速开始
 
-状态：v0.3  
+状态：v0.3
 日期：2026-05-05
-最近更新：2026-05-12
+最近更新：2026-05-13
 
-## 编程模型
+## 读者路径
 
-Python 版本的 `vatbrain` 提供 provider 级 client。用户先初始化某个厂商的 client，然后在每次调用时显式传入 model、上下文 items 和调用配置。
+本文用由简入繁的方式介绍 Python 版 `vatbrain` 的常用编程模型。完整 API 字段、枚举和当前 OpenAI adapter 支持范围见 [user/python/api-reference.CN.md](user/python/api-reference.CN.md)。Pydantic structured output 的细节见 [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
 
-`vatbrain` 不会自动选择 provider，不会自动选择 model，不会 fallback，也不会自动执行工具或运行 agent loop。用户代码始终掌控调用顺序、工具执行和上下文回填。
+`vatbrain` 是 provider-neutral 的推理调用抽象层，不是 agent runtime。它不会自动选择 provider、自动选择 model、自动 fallback、自动执行工具或自动维护远端会话。用户代码始终掌控 provider、model、上下文、工具执行和下一轮调用。
 
-当前实现了 OpenAI adapter：
+## 安装与环境
+
+仓库开发环境：
+
+```bash
+cd python
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[test]"
+.venv/bin/python -m pytest
+```
+
+OpenAI adapter 使用 `ENV_VATBRAIN_OPENAI_API_KEY`：
+
+```bash
+export ENV_VATBRAIN_OPENAI_API_KEY="..."
+```
+
+初始化 client：
 
 ```python
 from whero.vatbrain.providers.openai import OpenAIClient
@@ -18,13 +35,7 @@ from whero.vatbrain.providers.openai import OpenAIClient
 client = OpenAIClient()
 ```
 
-OpenAI API key 可以通过 `ENV_VATBRAIN_OPENAI_API_KEY` 环境变量提供：
-
-```bash
-export ENV_VATBRAIN_OPENAI_API_KEY="..."
-```
-
-也可以在初始化时显式传入通用 client 参数：
+也可以显式传入 provider client 参数：
 
 ```python
 client = OpenAIClient(
@@ -35,24 +46,7 @@ client = OpenAIClient(
 )
 ```
 
-显式参数优先于环境变量。少量 provider SDK 专有初始化参数仍可作为额外关键字参数传入。
-
-## 安装与测试
-
-在仓库内使用 Python 虚拟环境：
-
-```bash
-cd python
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[test]"
-.venv/bin/python -m pytest
-```
-
-所有 Python 开发与测试命令都应使用 `python/.venv`。
-
-## 内容生成
-
-最小文本生成：
+## 最小生成
 
 ```python
 from whero.vatbrain import MessageItem
@@ -72,12 +66,21 @@ for item in response.output_items:
     print(item)
 ```
 
-`items` 是完整上下文序列。每次调用都应传入本轮推理所需的全部上下文，而不是依赖 provider 侧隐式状态。
+`items` 是完整语义上下文。每次 generation 调用都应传入本轮推理所需的全部上下文，而不是依赖 provider 侧隐式 conversation。
 
-常用 generation 配置：
+异步调用：
 
 ```python
-from whero.vatbrain import GenerationConfig, ReasoningConfig, ToolCallConfig
+response = await client.agenerate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Hello")],
+)
+```
+
+## 常用生成配置
+
+```python
+from whero.vatbrain import GenerationConfig, MessageItem, ReasoningConfig, ToolCallConfig
 
 response = client.generate(
     model="gpt-5.1",
@@ -95,9 +98,21 @@ response = client.generate(
 )
 ```
 
-`reasoning` 和 `parallel_tool_calls` 是通用 generation 配置，不是 OpenAI 专有选项。不同 provider/model 可能只支持其中一部分字段。
+`GenerationConfig`、`ReasoningConfig`、`ToolCallConfig` 表达通用 generation 语义。不同 provider/model 可能只支持其中一部分字段；支持情况可通过 capability 查询。
 
-v0.3 新增 `RemoteContextHint`，用于显式表达 provider 侧 previous response 与 store hint。这只是优化提示，不改变 Full-context First，也不表示 `vatbrain` 使用 provider conversation 持久化上下文：
+少量尚未归一化的厂商参数可放入 `provider_options`：
+
+```python
+response = client.generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Hello")],
+    provider_options={"metadata": {"trace_id": "demo"}},
+)
+```
+
+## Remote Context 与 Replay
+
+`RemoteContextHint` 用于表达 provider-side previous response 和 store hint。它是优化提示，不是 vatbrain 的会话状态模型。
 
 ```python
 from whero.vatbrain import MessageItem, RemoteContextHint
@@ -123,40 +138,17 @@ response = client.generate(
 )
 ```
 
-OpenAI adapter 会映射 `previous_response_id` 与 `store`；provider conversation 这类持久化上下文能力暂不进入 core。
+要点：
 
-`store=None` 表示不由 `vatbrain` 显式指定存储策略，而是交给 provider 默认行为。本轮是否设置 `store=True` 只影响“本轮 response 是否便于未来作为 `previous_response_id` 被引用”；使用某个 `previous_response_id` 时，需要确保那个 id 对应 response 在生成时已开启存储，例如当时使用了 `RemoteContextHint(store=True)`，或用户明确依赖该 provider 的默认存储行为。
+- 用户侧仍传入完整 `items`。
+- `covered_item_count` 表示 `previous_response_id` 已覆盖完整 `items` 中的历史前缀。
+- OpenAI adapter 在边界明确时只向 provider 发送追加 suffix。
+- `store=True` 只影响本轮 response 未来是否便于被引用；不能补救历史 response 未存储的问题。
 
-上例中，`first_response.id` 对应的 provider response 覆盖了第一轮输入 `first_items` 与第一轮输出 `first_response.output_items`，所以第二轮完整上下文的 history 前缀是 `history_items`，`covered_item_count` 应为 `len(history_items)`。`items[len(history_items):]` 才是本轮追加的新输入。
-
-用户侧仍应传入完整 `items`。如果 `previous_response_id` 对应的 provider response 已覆盖完整上下文中的历史前缀，可以用 `covered_item_count` 显式说明覆盖范围；adapter 才能在 provider 请求层只发送追加 items：
-
-```python
-from whero.vatbrain import MessageItem, RemoteContextHint
-
-items = [
-    MessageItem.system("Answer with concise reasoning."),
-    MessageItem.user("Summarize the contract."),
-    MessageItem.assistant("The contract defines payment terms."),
-    MessageItem.user("Now extract the termination clause."),
-]
-
-response = client.generate(
-    model="gpt-5.1",
-    items=items,
-    remote_context=RemoteContextHint(
-        previous_response_id="resp_previous",
-        covered_item_count=3,
-    ),
-)
-```
-
-上例中，`items[:3]` 仍是本次调用的语义上下文；OpenAI provider 请求只需要传输 `items[3:]`。如果传入 `previous_response_id` 但没有 `covered_item_count`，OpenAI adapter 不应猜测哪些 item 是历史、哪些 item 是新增输入，应提示用户补充覆盖范围或移除 `previous_response_id`。
-
-Provider response 映射出的 `Item` 会在 `provider_snapshots` 字段保留同 provider/API family 的原始 item payload。再次调用同一 provider 时，OpenAI adapter 默认会优先使用该 snapshot 重放历史 item，从而保留 OpenAI assistant message 的 `phase` 等原生字段：
+Provider 返回的 output item 会在 `provider_snapshots` 字段保留原始 payload。OpenAI adapter 默认优先使用 snapshot 做同 provider 高保真重放，以保留 OpenAI `phase` 等原生字段。手工构造 assistant 历史消息时可使用通用 `AssistantMessagePhase`：
 
 ```python
-from whero.vatbrain import AssistantMessagePhase, MessageItem, ReplayPolicy
+from whero.vatbrain import AssistantMessagePhase, MessageItem
 
 history = [
     MessageItem.assistant(
@@ -165,30 +157,39 @@ history = [
     ),
     MessageItem.user("Continue."),
 ]
-
-response = client.generate(model="gpt-5.1", items=history)
 ```
 
-`assistant_phase` 是通用抽象，只对 assistant message 有意义。OpenAI adapter 会将其映射为原生 `phase`。如果需要禁用 snapshot replay 或强制所有重放 item 都带 provider 原始快照，可以使用 `ReplayPolicy(mode="normalized_only")` 或 `ReplayPolicy(mode="require_provider_native")`。
+如需控制 replay 策略：
 
-当 `previous_response_id` 失效时，OpenAI adapter 默认抛出 provider request error。只有显式设置 `ReplayPolicy(on_remote_context_invalid="replay_without_remote_context")` 时，client 才会移除失效的 `previous_response_id`，用完整 `items` 自动重试一次：
+```python
+from whero.vatbrain import ReplayPolicy
+
+response = client.generate(
+    model="gpt-5.1",
+    items=history,
+    replay_policy=ReplayPolicy(mode="normalized_only"),
+)
+```
+
+当 `previous_response_id` 失效时，默认抛错。只有显式启用 fallback 时，OpenAI client 才会移除失效 remote context，用完整 `items` 自动重试一次：
 
 ```python
 response = client.generate(
     model="gpt-5.1",
     items=history,
-    remote_context=RemoteContextHint(previous_response_id="resp_previous"),
-    replay_policy=ReplayPolicy(on_remote_context_invalid="replay_without_remote_context"),
+    remote_context=RemoteContextHint(
+        previous_response_id="resp_previous",
+        covered_item_count=1,
+    ),
+    replay_policy=ReplayPolicy(
+        on_remote_context_invalid="replay_without_remote_context",
+    ),
 )
 ```
 
-如果第一次请求使用 OpenAI previous response 差分传输，失效 fallback 仍会回到完整 `items`。因此不要只把“新增输入”传给 `items`；`items` 永远应是完整语义上下文。
-
-跨 provider replay 暂不支持；provider snapshot 只用于原 provider 的高保真重放。
+跨 provider replay 暂不支持。
 
 ## 流式生成
-
-流式调用返回标准化事件。v0.2 起，文本增量事件使用更明确的 `text.delta` 类型；为了兼容旧代码，OpenAI 文本增量事件仍会在 metadata 中标记旧语义。
 
 ```python
 from whero.vatbrain import MessageItem
@@ -201,9 +202,19 @@ for event in client.stream_generate(
         print(event.delta, end="")
 ```
 
-事件中会保留 `raw_event`，用于访问尚未被 `vatbrain` 标准化的 provider 原始事件。OpenAI Responses API 的最终 usage 通常随 `response.completed` 或 `response.incomplete` 中的完整 response 返回；`StreamOptions(include_usage=True)` 不会被映射为 OpenAI `stream_options.include_usage`。
+异步流式调用：
 
-如果需要从流式事件重建最终响应，可以使用 accumulator：
+```python
+async for event in client.astream_generate(
+    model="gpt-5.1",
+    items=[MessageItem.user("Write a short haiku.")],
+):
+    ...
+```
+
+事件会保留 `raw_event`，用于访问尚未标准化的 provider 原始事件。OpenAI Responses API 的最终 usage 通常随完整 response 返回；`StreamOptions(include_usage=True)` 不会被映射为 OpenAI `stream_options.include_usage`。
+
+从流式事件重建 `GenerationResponse`：
 
 ```python
 from whero.vatbrain import GenerationStreamAccumulator, MessageItem
@@ -221,19 +232,9 @@ for event in client.stream_generate(
 response = accumulator.to_response()
 ```
 
-异步流式调用：
-
-```python
-async for event in client.astream_generate(
-    model="gpt-5.1",
-    items=[MessageItem.user("Write a short haiku.")],
-):
-    ...
-```
-
 ## Structured Output
 
-OpenAI adapter 使用 Responses API 的 `text.format` 表达 JSON Schema structured output。`vatbrain` 不兼容已淘汰的 JSON mode / `json_object` 调用方式。
+`vatbrain` 只支持 JSON Schema structured output，不兼容 JSON mode / `json_object`。
 
 ```python
 from whero.vatbrain import MessageItem, ResponseFormat
@@ -257,11 +258,12 @@ response = client.generate(
 )
 ```
 
-Python 侧也可以用 Pydantic v2 生成 schema 并解析最终响应。该 helper 仍然产出普通 `ResponseFormat`，不会绕过 `vatbrain` 的 provider adapter：
+Python 侧可用 Pydantic v2 生成 schema 并解析最终响应：
 
 ```python
 from pydantic import BaseModel
 
+from whero.vatbrain import MessageItem
 from whero.vatbrain.structured import pydantic_output
 
 
@@ -281,7 +283,7 @@ response = client.generate(
 contact = contact_output.parse_response(response).output_parsed
 ```
 
-OpenAI client 还提供 `generate_parsed()` / `agenerate_parsed()` 薄封装：
+OpenAI client 也提供薄封装：
 
 ```python
 parsed = client.generate_parsed(
@@ -293,13 +295,21 @@ parsed = client.generate_parsed(
 contact = parsed.output_parsed
 ```
 
-Pydantic helper 需要安装 `whero-vatbrain[pydantic]`。默认 schema name 来自 Pydantic type 名称，description 来自 type docstring，strict 为 `True`；更多细节见 [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
+`generate_parsed()` 使用默认 Pydantic helper 行为。需要自定义 schema name、description 或 strict 时，使用 `pydantic_output()` + `generate()`。默认 schema name 来自类型名，description 来自类型 docstring，strict 为 `True`。
 
 ## 工具调用
 
-`vatbrain` 只定义工具协议，不执行工具。用户需要读取模型输出中的 `FunctionCallItem`，自行执行工具，然后把结果作为 `FunctionResultItem` 加入下一轮上下文。
+`vatbrain` 只定义工具协议，不执行工具。用户代码需要：
 
-默认的 `ToolSpec` 是 function tool：模型输出 JSON string `arguments`，用户代码需要解析 arguments。
+1. 声明工具。
+2. 读取 `FunctionCallItem`。
+3. 执行本地工具函数。
+4. 将 `FunctionResultItem` 加入完整上下文。
+5. 发起下一轮 generation。
+
+### Function Tool
+
+默认 `ToolSpec` 是 function tool。模型输出 JSON string `arguments`，用户代码负责解析：
 
 ```python
 import json
@@ -321,18 +331,14 @@ tools = [
         description="Get weather by city.",
         parameters_schema={
             "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-            },
+            "properties": {"city": {"type": "string"}},
             "required": ["city"],
         },
         strict=True,
     )
 ]
 
-items = [
-    MessageItem.user("What is the weather in Shanghai?"),
-]
+items = [MessageItem.user("What is the weather in Shanghai?")]
 
 response = client.generate(
     model="gpt-5.1",
@@ -343,11 +349,10 @@ response = client.generate(
 for output_item in response.output_items:
     if isinstance(output_item, FunctionCallItem):
         arguments = json.loads(output_item.arguments)
-        if output_item.name == "get_weather":
-            result = get_weather(city=arguments["city"])
-        else:
+        if output_item.name != "get_weather":
             raise ValueError(f"Unknown tool call: {output_item.name}")
 
+        result = get_weather(city=arguments["city"])
         items.append(output_item)
         items.append(
             FunctionResultItem(
@@ -363,7 +368,7 @@ followup = client.generate(
 )
 ```
 
-这段流程由用户代码驱动；`vatbrain` 不会自动调用 `get_weather`，也不会自动发起 follow-up 请求。
+### Custom Tool
 
 如果工具需要直接接收自然语言、代码或其他任意字符串输入，可以使用 custom tool。OpenAI adapter 会把 `ToolSpec(type="custom")` 映射为 OpenAI custom tool；custom tool 不使用 `parameters_schema`，模型输出保存在 `FunctionCallItem.input`：
 
@@ -410,11 +415,11 @@ followup = client.generate(
 )
 ```
 
-空 `parameters_schema` 不等于 custom tool；想让模型直接输出 raw string input 时，应显式设置 `type="custom"`。
+空 `parameters_schema` 不等于 custom tool。想让模型直接输出 raw string input 时，应显式设置 `type="custom"`。
 
 ## Embedding
 
-embedding 是独立入口，不并入 generation request。
+Embedding 是独立入口，不并入 generation request。
 
 ```python
 embedding = client.embed(
@@ -429,26 +434,29 @@ for vector in embedding.vectors:
     print(vector.index, vector.embedding)
 ```
 
-当前 OpenAI adapter 只支持 text embedding。多模态 embedding 属于 core 表达目标，但不在当前 OpenAI adapter 支持范围内。
+异步：
 
-v0.3 的 core 已能表达多模态 embedding、instructions 和 sparse vectors：
+```python
+embedding = await client.aembed(
+    model="text-embedding-3-small",
+    inputs=["first document"],
+)
+```
+
+当前 OpenAI adapter 只支持 text embedding。v0.3 core 已能表达多模态 embedding、instructions 和 sparse vectors，主要服务后续 provider adapter：
 
 ```python
 from whero.vatbrain import EmbeddingInput, ImagePart
 
 sample = EmbeddingInput(
-    [
-        ImagePart(url="https://example.test/image.png"),
-    ],
+    [ImagePart(url="https://example.test/image.png")],
     modality="image",
 )
 ```
 
-这只是 core 表达能力；OpenAI adapter 目前仍只接受文本 embedding input。
+## Core Models 边界
 
-## Core Models
-
-v0.3 新增音频、视频、文件、reasoning、resource/file 和 media artifact/task 的 core 模型。这些模型用于在不同 provider adapter 之间表达语义，不代表当前 OpenAI adapter 已全部支持。
+v0.3 新增音频、视频、文件、reasoning、resource/file 和 media artifact/task 的 core 模型。这些模型用于稳定跨 provider 语义，不代表当前 OpenAI adapter 已全部支持。
 
 ```python
 from whero.vatbrain import FilePart, MessageItem, VideoPart
@@ -463,28 +471,29 @@ items = [
 ]
 ```
 
-`FilePart.local_path`、`AudioPart.local_path` 和 `VideoPart.local_path` 只是路径 metadata，不会自动读取文件或上传文件。需要上传文件时，未来 provider adapter 会提供显式 file/resource API。
+`FilePart.local_path`、`AudioPart.local_path` 和 `VideoPart.local_path` 只是路径 metadata，不会自动读取文件或上传文件。
 
-工具抽象当前只覆盖用户代码执行的 function/custom tool。provider-hosted tool、remote tool 和 MCP tool 暂不暴露为通用 core 抽象。
+工具抽象当前只覆盖用户代码执行的 function/custom tool。provider-hosted tool、remote tool 和 MCP tool 暂不作为通用 core 抽象暴露。
 
 ## Capability
 
-adapter capability 描述当前 adapter 自身实现了什么：
+Adapter capability 描述当前 adapter 自身实现了什么：
 
 ```python
 capability = client.get_adapter_capability()
 print(capability.supports_generation)
-print(capability.supports_text_embedding)
+print(capability.generation.structured_output.value)
+print(capability.tools.custom_tools.value)
 ```
 
-model capability 是对某个 model 的能力描述，但不保证权威。对于上下文窗口、embedding 维度等易变字段，默认可能是 unknown：
+Model capability 是对某个 model 的能力描述，但不保证权威。未知字段以 `CapabilityValue(value=None)` 表示：
 
 ```python
 model_capability = client.get_model_capability("gpt-5.1")
-print(model_capability.max_context_tokens.value)  # None means unknown.
+print(model_capability.max_context_tokens.value)
 ```
 
-不同 provider 对 `ReasoningConfig.effort` 的取值和含义可能不同。adapter capability 会在可声明时列出 provider 支持的 effort；具体 model 也可以通过 model capability 或用户覆写给出更窄集合：
+不同 provider 对 `ReasoningConfig.effort` 的取值和含义可能不同。adapter/model capability 会在可声明时列出支持的 effort：
 
 ```python
 adapter_capability = client.get_adapter_capability()
@@ -494,7 +503,7 @@ model_capability = client.get_model_capability("gpt-5.1")
 print(model_capability.supported_reasoning_efforts.value)
 ```
 
-用户可以显式提供覆盖信息：
+用户可以显式提供模型能力覆盖：
 
 ```python
 client = OpenAIClient(
@@ -506,38 +515,46 @@ client = OpenAIClient(
 )
 ```
 
-用户提供的 capability 覆盖会被标记为 `user_config` / `user_supplied`。
+## 错误处理
 
-## Provider Options
-
-`provider_options` 用于传递暂未被 `vatbrain` 归一化的厂商专有参数：
+Provider 请求失败会抛出 `ProviderRequestError`，其中 `details` 保存 provider、operation、status code、request id、错误 code/param 与 raw body：
 
 ```python
-response = client.generate(
-    model="gpt-5.1",
-    items=[MessageItem.user("Hello")],
-    provider_options={
-        "metadata": {"trace_id": "example"},
-    },
-)
+from whero.vatbrain.core.errors import ProviderRequestError
+
+try:
+    response = client.generate(
+        model="gpt-5.1",
+        items=[MessageItem.user("Hello")],
+    )
+except ProviderRequestError as exc:
+    print(exc.details.provider)
+    print(exc.details.operation)
+    print(exc.details.status_code)
+    print(exc.details.request_id)
 ```
 
-如果某个参数表达的是通用 generation 语义，应优先使用 `GenerationConfig`、`ReasoningConfig`、`ToolCallConfig` 或其他 core 模型，而不是放入 `provider_options`。
+其他常见错误包括：
+
+- `InvalidItemError`：item 或 remote context 覆盖范围不合法。
+- `UnsupportedCapabilityError`：请求了 adapter 明确不支持的能力。
+- `ProviderResponseMappingError`：provider 响应无法映射为 vatbrain 模型。
+- `StructuredOutputParseError`：structured output 解析失败。
 
 ## 当前限制
 
-当前存在以下限制：
-
 - 仅实现 OpenAI provider。
-- generation 使用 OpenAI Responses API。
-- embedding 仅支持文本输入。
+- Generation 使用 OpenAI Responses API，不提供 Chat Completions fallback。
+- Embedding 仅支持文本输入。
 - v0.3 新增的 audio/video/file/reasoning/resource/media 模型主要是 core 表达层，OpenAI adapter 未全部映射。
-- streaming event 已覆盖 OpenAI Responses API 的主要 lifecycle、text、function call、reasoning summary/text 与错误事件；未知事件会 raw passthrough。
-- capability 不维护内部权威模型能力表。
+- Streaming event 已覆盖 OpenAI Responses API 的主要 lifecycle、text、function/custom tool call、reasoning summary/text 与错误事件；未知事件会 raw passthrough。
+- Capability 不维护内部权威模型能力表。
 - 不提供 routing、fallback、自动模型选择、自动工具执行或 agent loop。
+- 不暴露 provider-hosted tool、remote tool、MCP tool、provider conversation 持久化上下文的通用抽象。
 
 ## 参考
 
+- [user/python/api-reference.CN.md](user/python/api-reference.CN.md)
+- [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)
 - [design/high-level-design.CN.md](design/high-level-design.CN.md)
-- [impls/python/openai-adapter.CN.md](impls/python/openai-adapter.CN.md)
 - [impls/python/STATUS.md](impls/python/STATUS.md)

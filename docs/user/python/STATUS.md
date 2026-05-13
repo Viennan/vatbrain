@@ -1,26 +1,76 @@
 # Python 用户文档状态
 
-状态：v0.3 已更新  
+状态：v0.3 已系统化整理
 日期：2026-05-05
-最近更新：2026-05-12
+最近更新：2026-05-13
 
-## 已完成
+## 当前文档
 
-- Python 快速开始与编程模型：[user/python/quickstart.CN.md](user/python/quickstart.CN.md)。
-- Pydantic Structured Output 编程模型：[user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
-- OpenAI provider client 的基本使用方式。
-- generation、streaming、stream accumulator、JSON Schema-only structured output、Pydantic structured output helper、function/custom 工具调用、embedding、capability 的基础示例。
-- 说明 OpenAI Responses API 下 `StreamOptions(include_usage=True)` 不映射为 `stream_options.include_usage`。
-- 说明 provider-native snapshot、ReplayPolicy、OpenAI `phase` 保真、`AssistantMessagePhase` 基础用法和 response id 失效 fallback。
-- 说明 v0.3 新增 core models、RemoteContextHint、多模态 embedding 表达，以及这些模型与当前 OpenAI adapter 支持范围的边界。
-- 说明 `previous_response_id` 优化下仍需传入完整 `items`，并用 `RemoteContextHint.covered_item_count` 表达远端已覆盖的历史前缀。
-- 说明 `RemoteContextHint.store=None` 依赖 provider 默认存储策略；引用 `previous_response_id` 时，需要确保被引用 response 生成时已开启存储。
-- 说明 provider-hosted tool、remote tool、MCP tool 和 provider conversation 持久化上下文暂不作为通用 core 抽象暴露。
+- [user/python/quickstart.CN.md](user/python/quickstart.CN.md)：渐进式用户指南，从安装、client 初始化、generation、remote context/replay、streaming、structured output、tools、embedding、capability 到错误处理。
+- [user/python/api-reference.CN.md](user/python/api-reference.CN.md)：Python public API 参考，覆盖当前暴露给用户的 core dataclass、enum、provider client、Pydantic helper、capability、usage 与错误类型。
+- [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)：Pydantic structured output 编程模型，说明 helper、默认 schema 行为、strict schema、解析与错误处理。
+
+## 已覆盖
+
+- OpenAI provider client：
+  - 初始化。
+  - 环境变量。
+  - 同步/异步 generation。
+  - 同步/异步 streaming。
+  - 同步/异步 embedding。
+  - capability 查询。
+- Generation：
+  - Full-context First 编程模型。
+  - `GenerationConfig`。
+  - `ReasoningConfig`。
+  - `ToolCallConfig`。
+  - `ResponseFormat` JSON Schema structured output。
+  - `RemoteContextHint` 与 `covered_item_count`。
+  - `ReplayPolicy`、provider snapshot、OpenAI `phase` 与 `AssistantMessagePhase`。
+  - response id 失效后的显式 fallback。
+- Streaming：
+  - 标准化 event。
+  - `raw_event`。
+  - `GenerationStreamAccumulator`。
+- Structured Output：
+  - JSON Schema-only 原则。
+  - Pydantic helper。
+  - `generate_parsed()` / `agenerate_parsed()`。
+  - schema name、description、strict 默认行为。
+- Tools：
+  - Function tool 参数 schema 与 `FunctionCallItem.arguments` 解析。
+  - Custom tool raw string input。
+  - `FunctionResultItem` 回填。
+  - 空 `parameters_schema` 与 custom tool 的区别。
+- Embedding：
+  - OpenAI text embedding。
+  - v0.3 core 多模态/sparse embedding 表达边界。
+- Core models：
+  - `MessageItem`、content parts、function call/result、reasoning item。
+  - resources/file 模型。
+  - media artifact/task 模型。
+  - usage、capability、errors。
+- 限制：
+  - 仅 OpenAI provider。
+  - OpenAI generation 仅 Responses API。
+  - 不自动工具执行。
+  - 不暴露 provider-hosted/remote/MCP tool 的通用抽象。
+  - 不暴露 provider conversation 持久化上下文抽象。
+  - 不兼容 JSON mode。
+  - 不支持跨 provider replay。
+
+## 后续维护规则
+
+- 新增 public API 时，同步更新 [user/python/api-reference.CN.md](user/python/api-reference.CN.md)。
+- 用户常用主流程变化时，同步更新 [user/python/quickstart.CN.md](user/python/quickstart.CN.md)。
+- Structured output helper 变化时，同步更新 [user/python/pydantic-structured-output.CN.md](user/python/pydantic-structured-output.CN.md)。
+- 新增 provider adapter 时，新增 provider-specific quickstart，并在 API reference 中说明支持范围。
+- 若 provider adapter 支持某个 core 模型的真实调用，应把“core-only”边界更新为“provider-supported”。
 
 ## 待完善
 
-- 更完整的 API reference。
-- 真实 OpenAI 调用示例。
-- 常见错误处理指南。
-- 多模态输入示例。
-- 与未来 provider adapter 对齐后的跨厂商用法说明。
+- Volcengine adapter 用户指南。
+- Provider capability matrix。
+- 可选真实 API 调用示例。
+- 更系统的错误处理 cookbook。
+- 跨 provider 迁移指南，需等待第二 provider 落地后编写。

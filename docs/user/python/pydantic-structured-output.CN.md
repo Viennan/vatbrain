@@ -1,8 +1,8 @@
 # Python Pydantic Structured Output 编程模型
 
-状态：已实现  
-日期：2026-05-11  
-最近更新：2026-05-12
+状态：已实现
+日期：2026-05-11
+最近更新：2026-05-13
 
 ## 定位
 
@@ -192,5 +192,6 @@ OpenAI Python SDK 支持把 Pydantic model 传给 `client.responses.parse(..., t
 
 ## 相关文档
 
+- [user/python/api-reference.CN.md](user/python/api-reference.CN.md)
 - [impls/python/pydantic-structured-output.CN.md](impls/python/pydantic-structured-output.CN.md)
 - [user/python/quickstart.CN.md](user/python/quickstart.CN.md)
